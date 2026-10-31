@@ -1,6 +1,8 @@
 """Room checks: invalid polygons, overlaps, size, boundary support, labels."""
 from __future__ import annotations
 
+from ..geometry.geometric_utils import robust_intersection
+
 from ..models.base_entity import Status
 
 
@@ -40,9 +42,9 @@ def validate_rooms(report, rooms, labels, tol, cfg):
     for i, a in enumerate(live):
         for b in live[i + 1:]:
             if a.polygon.intersects(b.polygon):
-                inter = a.polygon.intersection(b.polygon).area
+                inter = robust_intersection(a.polygon, b.polygon).area
                 if inter > 0.05 * min(a.area, b.area):
-                    c = a.polygon.intersection(b.polygon).representative_point()
+                    c = robust_intersection(a.polygon, b.polygon).representative_point()
                     report.add("room", "overlapping_rooms", "error", a, (c.x, c.y),
                                f"Rooms {a.id} and {b.id} overlap.", "Correct one of the boundaries.", 0.8,
                                a.source_entities | b.source_entities)

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2D → 3D CAD Converter · Architectural Extraction Engine</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports": {"three": "./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<header>
+  <div class="brand">2D → 3D CAD Converter <span class="sub">deterministic DXF architectural extraction</span></div>
+  <div class="actions">
+    <label class="btn primary" title="Open a DXF drawing (DWG must be converted to DXF first)">
+      Open DXF…<input id="file" type="file" accept=".dxf,.DXF,.dwg,.DWG" hidden>
+    </label>
+    <select id="sample"><option value="">— or pick a sample drawing —</option></select>
+    <button id="loadSample" class="btn">Load sample</button>
+  </div>
+  <div id="status" class="status">Starting…</div>
+</header>
+
+<div id="loading" class="loading">
+  <div class="card">
+    <div class="spinner"></div>
+    <div id="loadingMsg">Loading the Python engine in your browser…</div>
+    <div class="small">The real Python pipeline (ezdxf, Shapely, NetworkX, Trimesh) runs locally in your browser through Pyodide. Your drawing never leaves your computer.</div>
+  </div>
+</div>
+
+<main>
+  <section class="stage">
+    <nav class="tabs">
+      <button data-tab="tab2d" class="active">2D review</button>
+      <button data-tab="tab3d">3D model</button>
+      <button data-tab="tabIssues">Validation <span id="issueCount" class="badge">0</span></button>
+      <button data-tab="tabInfo">Drawing info</button>
+      <button data-tab="tabBench">Benchmark</button>
+    </nav>
+    <div id="tab2d" class="tab active">
+      <div class="toolbar">
+        <span class="label">Tool:</span>
+        <button class="tool active" data-tool="select" title="Select an element to inspect its evidence and source entities">Select</button>
+        <button class="tool" data-tool="addwall" title="Click start and end point to add a missing wall">Add wall</button>
+        <button class="tool" data-tool="connect" title="Click two wall end points to connect them">Connect endpoints</button>
+        <button class="tool" data-tool="room" title="Click room corners; double-click or Enter to finish">Draw room</button>
+        <label class="small">thickness (m) <input id="thick" type="number" step="0.01" min="0" placeholder="unknown" value="0.15"></label>
+        <span class="sep"></span>
+        <button id="fit" class="btn small">Fit</button>
+        <span id="cursor" class="small mono"></span>
+      </div>
+      <div id="svgwrap"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="hint" class="hint"></div>
+        <div class="empty" id="empty2d">Open a DXF file or load a sample drawing to start.</div>
+      </div>
+    </div>
+    <div id="tab3d" class="tab">
+      <div class="toolbar">
+        <label><input type="checkbox" id="show3dFloors" checked> floors</label>
+        <label><input type="checkbox" id="show3dReview" checked> uncertain walls (orange)</label>
+        <label><input type="checkbox" id="show3dGlass" checked> glazing</label>
+        <span class="sep"></span>
+        <span class="small" id="defaults3d"></span>
+      </div>
+      <div id="view3d"></div>
+    </div>
+    <div id="tabIssues" class="tab scroll">
+      <div class="toolbar">
+        <label><input type="checkbox" class="sevf" value="error" checked> errors</label>
+        <label><input type="checkbox" class="sevf" value="warning" checked> warnings</label>
+        <label><input type="checkbox" class="sevf" value="info"> info</label>
+      </div>
+      <table id="issues" class="grid"></table>
+    </div>
+    <div id="tabInfo" class="tab scroll"><div id="info"></div></div>
+    <div id="tabBench" class="tab scroll"><div id="bench"></div></div>
+  </section>
+
+  <aside>
+    <details open>
+      <summary>Layers</summary>
+      <div id="layers" class="layers"></div>
+    </details>
+    <details open>
+      <summary>Selection</summary>
+      <div id="details" class="details"><span class="muted">Click a wall, opening, room, column or hypothesis.</span></div>
+    </details>
+    <details open>
+      <summary>Manual corrections <span id="corrCount" class="badge">0</span></summary>
+      <div class="corr">
+        <p class="small muted">Corrections are stored separately from the DXF data and re-applied by the engine (detection is cached).</p>
+        <button id="rerun" class="btn primary">Re-run with corrections</button>
+        <button id="undoCorr" class="btn">Undo last</button>
+        <button id="clearCorr" class="btn">Clear</button>
+        <div class="row"><button id="dlCorr" class="btn small">Download corrections</button>
+          <label class="btn small">Load corrections<input id="ulCorr" type="file" accept=".json" hidden></label></div>
+        <pre id="corrView" class="mono small"></pre>
+      </div>
+    </details>
+    <details open>
+      <summary>Export</summary>
+      <div class="exports">
+        <button class="btn" data-export="json">Architectural model (.json)</button>
+        <button class="btn" data-export="sqlite">Database (.sqlite)</button>
+        <button class="btn" data-export="glb">3D model (.glb)</button>
+        <button class="btn" data-export="report">Validation report (.html)</button>
+      </div>
+    </details>
+    <details>
+      <summary>Legend</summary>
+      <div class="legend small">
+        <div><i style="background:#1d4f91"></i> exterior wall</div>
+        <div><i style="background:#2f7d32"></i> interior wall</div>
+        <div><i style="background:#7cb342"></i> partition wall</div>
+        <div><i class="dash" style="border-color:#e08a00"></i> uncertain (needs review)</div>
+        <div><i style="background:#d32f2f;opacity:.4"></i> rejected candidate</div>
+        <div><i style="background:#ef6c00"></i> door</div>
+        <div><i style="background:#0288d1"></i> window</div>
+        <div><i style="background:#8e24aa"></i> unidentified opening</div>
+        <div><i style="background:#6a1b9a"></i> column</div>
+        <div><i style="background:#ffe9a8"></i> room</div>
+        <div><i class="dash" style="border-color:#ff00aa"></i> missing-wall hypothesis</div>
+      </div>
+    </details>
+  </aside>
+</main>
+<footer class="small muted">Phase 1: ingestion → preprocessing → semantic context → detectors → resolver → reconstruction → topology → classification → validation → export · Phase 2: Shapely + Trimesh 3D.
+  No machine learning: every decision is a deterministic rule with recorded evidence. <span id="build"></span></footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

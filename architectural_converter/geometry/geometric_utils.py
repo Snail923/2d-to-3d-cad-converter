@@ -111,22 +111,59 @@ def polygons_of(geom: BaseGeometry | None) -> list[Polygon]:
     return []
 
 
-def inscribed_width(poly: Polygon, max_iter: int = 14) -> float:
-    """Approximate width of the largest inscribed disc (2*r) by binary search on erosion."""
-    if poly.is_empty or poly.area <= 0:
+def make_valid_polygonal(geom):
+    """Repair invalid polygons (self-touching rings from noding etc.) without changing valid ones."""
+    if geom is None or geom.is_empty or geom.is_valid:
+        return geom
+    try:
+        from shapely import make_valid
+        fixed = make_valid(geom)
+    except Exception:
+        fixed = geom.buffer(0)
+    polys = polygons_of(fixed)
+    if not polys:
+        return geom.buffer(0)
+    return robust_union(polys)
+
+
+def safe_buffer(geom, dist, **kw):
+    """Buffer of derived geometry, made robust against GEOS TopologyExceptions.
+
+    In Pyodide a GEOS C++ exception aborts the interpreter instead of raising, so it cannot be
+    caught: the input is snapped to a fine precision grid first (removes near-coincident
+    vertices / zero-width spikes that trigger 'depth mismatch')."""
+    try:
+        from shapely import set_precision
+        g = set_precision(geom, 1e-7)
+    except Exception:
+        g = geom
+    if g.is_empty:
+        return g
+    return g.buffer(dist, **kw)
+
+
+def inscribed_width(poly: Polygon, tolerance: float | None = None) -> float:
+    """Width (2 r) of the largest inscribed circle, via the pole of inaccessibility.
+
+    Uses only distance computations (no buffering), which keeps it robust on noded faces."""
+    if poly is None or poly.is_empty or poly.area <= 0:
         return 0.0
-    minx, miny, maxx, maxy = poly.bounds
-    hi = min(maxx - minx, maxy - miny) / 2.0
-    lo = 0.0
-    for _ in range(max_iter):
-        mid = (lo + hi) / 2.0
-        if mid <= 0:
-            break
-        if poly.buffer(-mid, join_style=2).is_empty:
-            hi = mid
-        else:
-            lo = mid
-    return 2.0 * lo
+    from shapely.ops import polylabel
+    best = 0.0
+    for p in polygons_of(make_valid_polygonal(poly)):
+        if p.area <= 0:
+            continue
+        minx, miny, maxx, maxy = p.bounds
+        tol = tolerance or max(min(maxx - minx, maxy - miny) / 200.0, 1e-6)
+        try:
+            c = polylabel(p, tolerance=tol)
+        except Exception:
+            c = p.representative_point()
+        r = p.exterior.distance(c)
+        for h in p.interiors:
+            r = min(r, h.distance(c))
+        best = max(best, 2.0 * r)
+    return best
 
 
 def thin_fraction(poly: BaseGeometry, max_half_thickness: float) -> float:
@@ -134,7 +171,8 @@ def thin_fraction(poly: BaseGeometry, max_half_thickness: float) -> float:
     ``max_half_thickness``. 1.0 means the region is thin everywhere (wall-like)."""
     if poly.is_empty or poly.area <= 0:
         return 0.0
-    opened = poly.buffer(-max_half_thickness, join_style=2).buffer(max_half_thickness, join_style=2)
+    poly = make_valid_polygonal(poly)
+    opened = safe_buffer(safe_buffer(poly, -max_half_thickness, join_style=2), max_half_thickness, join_style=2)
     return float(max(0.0, 1.0 - opened.area / poly.area))
 
 
@@ -186,3 +224,28 @@ def coords_list(geom: BaseGeometry, nd: int = 4):
     if isinstance(geom, MultiPolygon):
         return [coords_list(g, nd) for g in geom.geoms]
     return None
+
+
+# ---------------------------------------------------------------------------- robust overlay
+# Snap-rounding overlay on a fixed grid (GEOS OverlayNG with precision model). Floating-point
+# overlay can fail with "non-noded intersection" on nearly collinear edges (e.g. rotated plans);
+# in Pyodide such a GEOS exception aborts the interpreter, so derived geometry always goes here.
+GRID = 1e-6
+
+
+def robust_union(geoms, grid: float = GRID):
+    import shapely
+    geoms = [g for g in geoms if g is not None and not g.is_empty]
+    if not geoms:
+        return GeometryCollection()
+    return shapely.union_all(shapely.set_precision(geoms, grid), grid_size=grid)
+
+
+def robust_difference(a, b, grid: float = GRID):
+    import shapely
+    return shapely.difference(shapely.set_precision(a, grid), shapely.set_precision(b, grid), grid_size=grid)
+
+
+def robust_intersection(a, b, grid: float = GRID):
+    import shapely
+    return shapely.intersection(shapely.set_precision(a, grid), shapely.set_precision(b, grid), grid_size=grid)

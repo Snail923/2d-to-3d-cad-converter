@@ -7,9 +7,9 @@ import math
 
 import numpy as np
 from shapely.geometry import MultiPoint, Polygon
-from shapely.ops import polygonize, unary_union
+from shapely.ops import polygonize
 
-from ..geometry.geometric_utils import mrr_dims, polygons_of
+from ..geometry.geometric_utils import mrr_dims, polygons_of, robust_union, robust_intersection
 from ..models.column import Column
 from .base_detector import BaseDetector, register
 
@@ -63,7 +63,7 @@ class ColumnDetector(BaseDetector):
         hi = self.cfg["detection"]["column"]["size_m"][1]
         short = [st.line() for st in ctx.strokes if st.length <= hi * 1.05]
         if short:
-            noded = unary_union(short)
+            noded = robust_union(short)
             for face in polygonize(noded):
                 if self._ok(face) and face.area / max(face.minimum_rotated_rectangle.area, 1e-12) > 0.9:
                     srcs = set()
@@ -80,7 +80,7 @@ class ColumnDetector(BaseDetector):
         merged: list[dict] = []
         for poly, srcs, layer, origin, nh in raw:
             for m in merged:
-                inter = m["poly"].intersection(poly).area
+                inter = robust_intersection(m["poly"], poly).area
                 if inter >= 0.6 * min(m["poly"].area, poly.area):
                     m["srcs"] |= srcs
                     m["origins"].add(origin)
@@ -90,7 +90,7 @@ class ColumnDetector(BaseDetector):
             else:
                 merged.append({"poly": poly, "srcs": set(srcs), "origins": {origin}, "layers": {layer}, "name_hint": nh})
         fills = [h.polygon for h in ctx.hatch_regions if h.cls in ("column_fill", "wall_fill")]
-        fill_u = unary_union(fills) if fills else None
+        fill_u = robust_union(fills) if fills else None
         sizes = []
         for m in merged:
             w, L = self._ok(m["poly"])
@@ -107,7 +107,7 @@ class ColumnDetector(BaseDetector):
             col.source_entities |= m["srcs"]
             col.add_evidence("size_plausibility", 1.0)
             col.add_evidence("shape", 1.0 if col.shape != "polygonal" else 0.5)
-            filled = "fill" in m["origins"] or (fill_u is not None and fill_u.intersection(p).area >= 0.8 * p.area)
+            filled = "fill" in m["origins"] or (fill_u is not None and robust_intersection(fill_u, p).area >= 0.8 * p.area)
             col.add_evidence("filled", 1.0 if filled else 0.0)
             lay = max((ctx.layer_score(l, "column") for l in m["layers"] if l), default=0.0)
             furn = max((ctx.layer_score(l, "furniture") for l in m["layers"] if l), default=0.0)

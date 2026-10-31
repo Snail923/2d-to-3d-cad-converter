@@ -14,9 +14,9 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 from shapely.geometry import LineString, Point
-from shapely.ops import polygonize, unary_union
+from shapely.ops import polygonize
 
-from ..geometry.geometric_utils import dot, inscribed_width
+from ..geometry.geometric_utils import dot, inscribed_width, robust_union, robust_intersection
 from ..models.base_entity import Status
 from ..models.wall import Wall
 from .base_detector import BaseDetector, register
@@ -38,10 +38,10 @@ class SingleLineWallDetector(BaseDetector):
         for w in geom_walls:
             faces_used |= w.face_segments
         wall_polys = [p for p in (w.polygon() for w in geom_walls) if p is not None]
-        wall_union = unary_union(wall_polys).buffer(tol.snap) if wall_polys else None
+        wall_union = robust_union(wall_polys).buffer(tol.snap) if wall_polys else None
         symbol_fp = [o.footprint for d in ("door_detector", "window_detector") for o in ctx.candidates.get(d, [])
                      if o.footprint is not None and o.status != Status.REJECTED]
-        symbol_union = unary_union(symbol_fp).buffer(tol.snap) if symbol_fp else None
+        symbol_union = robust_union(symbol_fp).buffer(tol.snap) if symbol_fp else None
         # drawing convention: if most wall-like linework is already explained by double-line
         # walls, an unpaired single line needs explicit wall-layer evidence
         tot = sum(st.length for st in ctx.strokes if np.mean([ctx.wall_evidence(l) for l in st.layers]) >= 0.3)
@@ -61,7 +61,7 @@ class SingleLineWallDetector(BaseDetector):
             ln = st.line()
             if wall_union is not None and ln.within(wall_union):
                 continue
-            if symbol_union is not None and ln.intersection(symbol_union).length > 0.5 * ln.length:
+            if symbol_union is not None and robust_intersection(ln, symbol_union).length > 0.5 * ln.length:
                 continue
             cand.append((k, st, lay))
         if not cand:
@@ -94,7 +94,7 @@ class SingleLineWallDetector(BaseDetector):
                     for b in range(len(cand)):
                         if b == a or lines[b].distance(ray) > tol.snap * 2:
                             continue
-                        inter = lines[b].buffer(tol.snap * 2).intersection(ray)
+                        inter = robust_intersection(lines[b].buffer(tol.snap * 2), ray)
                         d = pt.distance(inter)
                         if best is None or d < best[0]:
                             best = (d, b)
@@ -115,16 +115,16 @@ class SingleLineWallDetector(BaseDetector):
         net = [ln for ln in lines] + bridges
         if wall_union is not None:
             net.append(wall_union.boundary)
-        faces = [f for f in polygonize(unary_union(net)) if f.area >= cfg["min_room_face_area_m2"]
+        faces = [f for f in polygonize(robust_union(net)) if f.area >= cfg["min_room_face_area_m2"]
                  and inscribed_width(f) >= 0.6]
-        face_bnd = unary_union([f.exterior for f in faces]).buffer(tol.snap * 2) if faces else None
+        face_bnd = robust_union([f.exterior for f in faces]).buffer(tol.snap * 2) if faces else None
         out = []
         for a, (k, st, lay) in enumerate(cand):
             share = comp_len[a] / largest
             if share < cfg["min_component_share"] and lay < 0.9:
                 continue
             ln = lines[a]
-            cyc = ln.intersection(face_bnd).length / ln.length if face_bnd is not None else 0.0
+            cyc = robust_intersection(ln, face_bnd).length / ln.length if face_bnd is not None else 0.0
             conn = float(min(ends_conn[a, 0], 1.0) + min(ends_conn[a, 1], 1.0)) / 2.0
             if cyc < 0.5 and lay < 0.9 and conn < 1.0:
                 continue

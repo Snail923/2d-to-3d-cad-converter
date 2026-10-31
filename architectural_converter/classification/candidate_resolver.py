@@ -15,9 +15,8 @@ import math
 
 import numpy as np
 from shapely.geometry import Point
-from shapely.ops import unary_union
 
-from ..geometry.geometric_utils import angle_diff, dir_angle, dot, frame_point, normal
+from ..geometry.geometric_utils import angle_diff, dir_angle, dot, frame_point, normal, robust_union, robust_intersection
 from ..models.base_entity import Status
 from ..models.wall import Wall
 
@@ -132,14 +131,14 @@ class CandidateResolver:
     def _context_evidence(self, walls, ctx):
         tol = ctx.tol
         fills = [h.polygon for h in ctx.hatch_regions if h.cls == "wall_fill"]
-        fill_u = unary_union(fills).buffer(tol.snap * 2) if fills else None
+        fill_u = robust_union(fills).buffer(tol.snap * 2) if fills else None
         cov_min = self.cfg["detection"]["hatch"]["coverage_for_fill_evidence"]
         for w in walls:
             p = w.polygon()
             if p is None or p.area <= 0:
                 continue
             if fill_u is not None:
-                cov = fill_u.intersection(p).area / p.area
+                cov = robust_intersection(fill_u, p).area / p.area
                 if cov >= cov_min:
                     w.add_evidence("hatch_fill", cov)
                     for h in ctx.hatch_regions:
@@ -164,11 +163,11 @@ class CandidateResolver:
 
     def _absorb_polygons(self, walls, tol, log):
         straight = [w for w in walls if w.kind in ("straight", "arc") and w.polygon() is not None]
-        su = unary_union([w.polygon() for w in straight]).buffer(tol.snap * 3) if straight else None
+        su = robust_union([w.polygon() for w in straight]).buffer(tol.snap * 3) if straight else None
         out = []
         for w in walls:
             if w.kind == "polygon" and su is not None and w.shape is not None:
-                cov = su.intersection(w.shape).area / max(w.shape.area, 1e-12)
+                cov = robust_intersection(su, w.shape).area / max(w.shape.area, 1e-12)
                 if cov >= 0.85:
                     for s in straight:
                         if s.polygon().intersects(w.shape):
@@ -188,7 +187,7 @@ class CandidateResolver:
             if p is None or p.area <= 0:
                 continue
             for o, fp in regions:
-                if fp.intersection(p).area >= 0.8 * p.area:
+                if robust_intersection(fp, p).area >= 0.8 * p.area:
                     if o.type == "window" and o.depth and (not w.thickness or w.thickness > o.depth * 0.9):
                         continue  # the wall band contains the window: only thinner glazing pairs are vetoed
                     w.veto(f"inside {o.type} {o.id}")
@@ -218,7 +217,7 @@ class CandidateResolver:
             if p is None or p.area <= 0:
                 continue
             for c, cp in cols:
-                if cp.intersection(p).area >= 0.7 * p.area:
+                if robust_intersection(cp, p).area >= 0.7 * p.area:
                     w.veto(f"inside column {c.id}")
                     log["walls_rejected_by_columns"] += 1
                     break
@@ -230,7 +229,7 @@ class CandidateResolver:
             for w in windows:
                 if w.footprint is None:
                     continue
-                if w.footprint.intersection(d.footprint.buffer(tol.snap)).area > 0.5 * w.footprint.area:
+                if robust_intersection(w.footprint, d.footprint.buffer(tol.snap)).area > 0.5 * w.footprint.area:
                     loser = w if d.confidence >= w.confidence else d
                     loser.notes.append("conflicting door/window interpretation")
                     loser.add_evidence("width_plausibility", 0.0)
@@ -251,7 +250,7 @@ class CandidateResolver:
             for k in kept:
                 if k.kind == w.kind == "straight" and abs(dot(k.u, w.u)) < 0.95:
                     continue  # crossing walls at junctions are expected
-                inter = k.polygon().intersection(p).area
+                inter = robust_intersection(k.polygon(), p).area
                 if inter >= 0.6 * p.area:
                     w.veto(f"overlaps stronger candidate {k.id}")
                     log["conflicts"] += 1

@@ -1,6 +1,8 @@
 """Wall classification: exterior / interior / partition (+ openings and columns)."""
 from __future__ import annotations
 
+from ..geometry.geometric_utils import robust_intersection
+
 from ..models.base_entity import Status
 from .architectural_rules import building_footprint, partition_threshold
 
@@ -17,7 +19,7 @@ def classify_walls(walls, solid, tol, cfg):
             w.classification = "interior_wall"
             continue
         L = max(w.length, 1e-9)
-        ext = p.buffer(tol.snap * 3).intersection(ring).length
+        ext = robust_intersection(p.buffer(tol.snap * 3), ring).length
         w.classification = "exterior_wall" if ext >= cc["exterior_face_fraction"] * L else "interior_wall"
     limit = partition_threshold([w for w in walls if w.status != Status.REJECTED], cfg)
     for w in walls:

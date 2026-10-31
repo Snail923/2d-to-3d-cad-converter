@@ -8,9 +8,8 @@ irregular walls) become polygon candidates."""
 from __future__ import annotations
 
 from shapely.geometry import Point
-from shapely.ops import unary_union
 
-from ..geometry.geometric_utils import frame_point, polygons_of, rect_polygon, thin_fraction, inscribed_width
+from ..geometry.geometric_utils import frame_point, polygons_of, rect_polygon, thin_fraction, inscribed_width, robust_union
 from ..geometry.geometry_adapter import Segment, build_strokes
 from ..geometry.segment_pairing import find_pairs, resolve_side_conflicts
 from ..models.wall import Wall
@@ -43,7 +42,7 @@ class HatchWallDetector(BaseDetector):
                                         p0=np.array(a), p1=np.array(b), origin="hatch", role="linework"))
         strokes = build_strokes(segs, tol.snap, tol.angle, prefix="hk", same_layer=False)
         pieces, _ = find_pairs(strokes, tol, self.cfg["detection"]["parallel"])
-        fill = unary_union([r.polygon for r in regions])
+        fill = robust_union([r.polygon for r in regions])
         good = []
         for p in pieces:
             mid = frame_point(p.u, (p.s0 + p.s1) / 2, p.c)
@@ -61,7 +60,7 @@ class HatchWallDetector(BaseDetector):
             out.append(w)
             covered.append(rect_polygon(p.u, p.c, p.s0, p.s1, p.thickness).buffer(tol.snap * 2))
         # thin fill parts not explained by pairs
-        rest = fill.difference(unary_union(covered)) if covered else fill
+        rest = fill.difference(robust_union(covered)) if covered else fill
         for part in polygons_of(rest):
             if part.area < (tol.thickness_min * 4) ** 2:
                 continue

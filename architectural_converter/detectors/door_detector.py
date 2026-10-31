@@ -14,9 +14,8 @@ import math
 
 import numpy as np
 from shapely.geometry import MultiPoint, Polygon
-from shapely.ops import unary_union
 
-from ..geometry.geometric_utils import mrr_dims
+from ..geometry.geometric_utils import mrr_dims, robust_union
 from ..models.opening import Opening
 from .base_detector import BaseDetector, register
 from .symbol_analysis import door_arcs, leaf_line_for
@@ -140,7 +139,7 @@ class DoorDetector(BaseDetector):
                 used |= {i, j}
                 o = Opening(id=ctx.ids.new("door"), type="door", subtype="double_swing", p0=tuple(A["c"]), p1=tuple(B["c"]),
                             width=d, swing={"leaves": 2, "radii": [A["r"], B["r"]]})
-                o.footprint = unary_union([A["sector"], B["sector"]])
+                o.footprint = robust_union([A["sector"], B["sector"]])
                 self._evidence(o, [A, B], ctx)
                 o.add_evidence("width_plausibility", 1.0)
                 out.append(o)

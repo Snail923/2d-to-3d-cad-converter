@@ -6,10 +6,9 @@ Two candidates on the same axis band (same direction, offset and thickness) are 
 Gaps of opening size are *not* merged here (see ``opening_reconstruction``)."""
 from __future__ import annotations
 
-from shapely.ops import unary_union
 
 from ..classification.candidate_resolver import aligned, same_band
-from ..geometry.geometric_utils import rect_polygon
+from ..geometry.geometric_utils import rect_polygon, robust_union, robust_intersection
 from ..models.wall import Wall
 
 
@@ -73,8 +72,8 @@ def merge_collinear(walls: list[Wall], tol, covered_factor: float = 1.3) -> list
                 t = a.thickness or tol.snap * 2
                 gp = rect_polygon(a.u, a.c, g0, g1, t)
                 polys = [o.polygon(tol.snap * 2) for o in walls if o is not a and o is not b]
-                cover = unary_union([p for p in polys if p is not None and p.intersects(gp)])
-                if not cover.is_empty and cover.buffer(tol.snap).intersection(gp).area >= 0.9 * gp.area:
+                cover = robust_union([p for p in polys if p is not None and p.intersects(gp)])
+                if not cover.is_empty and robust_intersection(cover.buffer(tol.snap), gp).area >= 0.9 * gp.area:
                     reason = "continuous through junction"
             if reason:
                 merge_into(a, b, reason, (g0, g1) if gap > 0 else None)

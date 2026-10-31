@@ -14,7 +14,7 @@ import math
 import numpy as np
 from shapely.geometry import MultiPoint, Point
 
-from ..geometry.geometric_utils import angle_diff, dot, frame_point, mrr_dims, normal, rect_polygon
+from ..geometry.geometric_utils import angle_diff, dot, frame_point, mrr_dims, normal, rect_polygon, robust_intersection
 from ..geometry.segment_pairing import cluster_consistency
 from ..models.opening import Opening
 from .base_detector import BaseDetector, register
@@ -193,7 +193,7 @@ class WindowDetector(BaseDetector):
             merged = False
             for p in out:
                 if p.footprint is not None and o.footprint is not None:
-                    inter = p.footprint.buffer(ctx.tol.snap * 2).intersection(o.footprint).area
+                    inter = robust_intersection(p.footprint.buffer(ctx.tol.snap * 2), o.footprint).area
                     if inter >= 0.5 * min(p.footprint.area, o.footprint.area):
                         p.absorb(o)
                         merged = True

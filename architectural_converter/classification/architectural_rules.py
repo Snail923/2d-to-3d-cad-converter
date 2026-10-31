@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import numpy as np
 from shapely.geometry import Polygon
-from shapely.ops import unary_union
 
-from ..geometry.geometric_utils import polygons_of
+from ..geometry.geometric_utils import polygons_of, robust_union
 
 
 def building_footprint(solid):
     """Filled outline of the wall solid (all parts, holes removed)."""
     if solid is None or solid.is_empty:
         return None
-    return unary_union([Polygon(p.exterior) for p in polygons_of(solid)])
+    return robust_union([Polygon(p.exterior) for p in polygons_of(solid)])
 
 
 def partition_threshold(walls, cfg) -> float:

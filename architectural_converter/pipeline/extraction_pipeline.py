@@ -11,6 +11,8 @@ Stages (each can be run on its own for debugging with ``run_stage``):
 """
 from __future__ import annotations
 
+from ..geometry.geometric_utils import robust_intersection
+
 import copy
 import time
 from dataclasses import dataclass, field
@@ -148,7 +150,12 @@ class ExtractionPipeline:
                 continue  # labels are produced while building the context
             det = DETECTORS[name](self.cfg)
             t0 = time.perf_counter()
-            ctx.candidates[name] = det.detect(st.drawing, ctx)
+            try:
+                ctx.candidates[name] = det.detect(st.drawing, ctx)
+            except Exception as exc:  # a failing detector must not stop the other independent detectors
+                ctx.candidates[name] = []
+                st.drawing.issues.append({"stage": "detect", "severity": "warning",
+                                          "message": f"Detector {name} failed and was skipped: {type(exc).__name__}: {exc}"})
             st.timings[f"detect:{name}"] = round(time.perf_counter() - t0, 4)
         shares = layer_parallel_shares(ctx.strokes, ctx.pairs)
         for k, v in shares.items():
@@ -214,7 +221,7 @@ class ExtractionPipeline:
         if mrooms:
             keep = []
             for r in rooms:
-                if any(m.polygon.intersection(r.polygon).area > 0.5 * min(m.polygon.area, r.polygon.area) for m in mrooms):
+                if any(robust_intersection(m.polygon, r.polygon).area > 0.5 * min(m.polygon.area, r.polygon.area) for m in mrooms):
                     r.veto("replaced by manual room boundary")
                 keep.append(r)
             from ..topology.boundary_validator import boundary_support

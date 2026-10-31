@@ -1,0 +1,6 @@
+# Pinned to the versions available in Pyodide 0.28 so the CLI and the browser run identical code.
+ezdxf==1.4.5
+shapely==2.0.7
+networkx==3.4.2
+numpy==2.2.5
+trimesh==5.2.0

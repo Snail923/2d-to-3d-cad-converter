@@ -91,6 +91,8 @@ def _dominant_parallel_spacing(d: Drawing, extent: float) -> float | None:
     weights = np.array(weights)
     # weight short spacings higher (nearest neighbour); histogram in log space
     logd = np.log(dists)
+    if float(np.ptp(logd)) < 1e-6:  # all spacings identical (e.g. one simple room)
+        return float(dists[0])
     hist, edges = np.histogram(logd, bins=60, weights=weights / np.sqrt(dists))
     k = int(np.argmax(hist))
     return float(math.exp((edges[k] + edges[k + 1]) / 2))

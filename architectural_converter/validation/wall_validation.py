@@ -1,6 +1,8 @@
 """Wall checks: free ends, unexpected intersections, overlaps, thickness, duplicates, support."""
 from __future__ import annotations
 
+from ..geometry.geometric_utils import robust_intersection
+
 from ..classification.candidate_resolver import same_band
 from ..models.base_entity import Status
 from ..topology.graph_builder import free_ends
@@ -21,7 +23,7 @@ def validate_walls(report, walls, columns, tol, cfg):
         for b, pb in polys[i + 1:]:
             if not pa.intersects(pb):
                 continue
-            inter = pa.intersection(pb)
+            inter = robust_intersection(pa, pb)
             if inter.area <= 0:
                 continue
             small = min(pa.area, pb.area)

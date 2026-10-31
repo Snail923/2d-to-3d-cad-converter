@@ -22,7 +22,7 @@ import math
 from shapely.geometry import LineString, Point
 
 from ..classification.candidate_resolver import aligned, same_band
-from ..geometry.geometric_utils import dot, frame_point, line_intersection, rect_polygon
+from ..geometry.geometric_utils import dot, frame_point, line_intersection, rect_polygon, robust_intersection
 from ..models.base_entity import Status
 from ..models.opening import Opening
 from ..models.wall import Wall
@@ -75,7 +75,7 @@ class OpeningReconstructor:
             poly = v.polygon(self.tol.snap * 2)
             if poly is None or not poly.intersects(ray):
                 continue
-            inter = poly.intersection(ray)
+            inter = robust_intersection(poly, ray)
             d = Point(p).distance(inter)
             if d <= self.tol.snap * 0.5:
                 continue
@@ -235,7 +235,7 @@ class OpeningReconstructor:
             return a, b
         cuts = []
         for p in cover:
-            inter = p.intersection(slot)
+            inter = robust_intersection(p, slot)
             if inter.is_empty:
                 continue
             xs = [dot(c, w.u) for g in getattr(inter, "geoms", [inter]) for c in getattr(g, "exterior", g).coords]

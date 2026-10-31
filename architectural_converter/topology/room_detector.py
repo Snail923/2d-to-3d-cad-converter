@@ -11,9 +11,8 @@ from __future__ import annotations
 import re
 
 from shapely.geometry import Point, Polygon
-from shapely.ops import unary_union
 
-from ..geometry.geometric_utils import inscribed_width, polygons_of
+from ..geometry.geometric_utils import inscribed_width, make_valid_polygonal, polygons_of, safe_buffer, robust_union, robust_difference, robust_intersection
 from ..models.base_entity import Status
 from ..models.room import Room
 
@@ -32,9 +31,9 @@ def wall_solid(walls, columns, tol, cfg, extra=None):
         polys.append(p)
     if not polys:
         return None
-    solid = unary_union(polys)
+    solid = robust_union(polys)
     r = max(tol.snap * cfg["tolerances"]["topology_close_factor"], 1e-4)
-    solid = solid.buffer(r, join_style=2).buffer(-r, join_style=2)
+    solid = safe_buffer(safe_buffer(make_valid_polygonal(solid), r, join_style=2), -r, join_style=2)
     return solid
 
 
@@ -43,9 +42,9 @@ def holes_of(solid):
     for poly in polygons_of(solid):
         for ring in poly.interiors:
             hp = Polygon(ring)
-            inner = solid.intersection(hp)
+            inner = robust_intersection(solid, hp)
             if not inner.is_empty and inner.area > 0:
-                hp = hp.difference(solid)
+                hp = robust_difference(hp, solid)
             for q in polygons_of(hp):
                 out.append(q)
     return out
@@ -62,9 +61,9 @@ class RoomDetector:
         if solid is None:
             return [], None, {"candidates": 0}
         accepted = [w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.ACCEPTED]
-        acc_u = unary_union([p for p in accepted if p is not None]).buffer(tol.snap * 3) if accepted else None
+        acc_u = robust_union([p for p in accepted if p is not None]).buffer(tol.snap * 3) if accepted else None
         review = [w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.NEEDS_REVIEW]
-        rev_u = unary_union([p for p in review if p is not None]).buffer(tol.snap * 3) if review else None
+        rev_u = robust_union([p for p in review if p is not None]).buffer(tol.snap * 3) if review else None
         op_polys = []
         wmap = {w.id: w for w in walls}
         for o in openings:
@@ -73,7 +72,7 @@ class RoomDetector:
                 from ..geometry.geometric_utils import rect_polygon
                 op_polys.append(rect_polygon(w.u, w.c, o.host_interval[0], o.host_interval[1],
                                              (w.thickness or tol.snap * 2) + tol.snap * 4))
-        op_u = unary_union(op_polys) if op_polys else None
+        op_u = robust_union(op_polys) if op_polys else None
         rooms = []
         log = {"candidates": 0, "tiny": 0, "narrow": 0, "large": 0}
         for hp in holes_of(solid):
@@ -86,10 +85,10 @@ class RoomDetector:
             width = inscribed_width(hp)
             bnd = hp.exterior
             L = bnd.length
-            f_acc = bnd.intersection(acc_u).length / L if acc_u is not None else 0.0
-            f_rev = bnd.difference(acc_u).intersection(rev_u).length / L if (rev_u is not None and acc_u is not None) else (
-                bnd.intersection(rev_u).length / L if rev_u is not None else 0.0)
-            f_op = bnd.intersection(op_u).length / L if op_u is not None else 0.0
+            f_acc = robust_intersection(bnd, acc_u).length / L if acc_u is not None else 0.0
+            f_rev = robust_intersection(robust_difference(bnd, acc_u), rev_u).length / L if (rev_u is not None and acc_u is not None) else (
+                robust_intersection(bnd, rev_u).length / L if rev_u is not None else 0.0)
+            f_op = robust_intersection(bnd, op_u).length / L if op_u is not None else 0.0
             r.boundary_support = {"accepted_walls": f_acc, "review_walls": f_rev, "openings": f_op,
                                   "inscribed_width": width}
             r.add_evidence("wall_support", min(1.0, f_acc + 0.6 * f_rev + 0.3 * f_op))

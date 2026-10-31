@@ -15,7 +15,7 @@ import math
 
 from shapely.geometry import LineString, Point
 
-from ..geometry.geometric_utils import canonical_dir, dot, normal
+from ..geometry.geometric_utils import canonical_dir, dot, normal, robust_intersection
 from ..models.base_entity import Status
 from ..models.room import Room
 from ..models.wall import Wall
@@ -44,7 +44,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         for v, poly in bodies:
             if v is w or poly is None or not poly.intersects(ray):
                 continue
-            d = Point(p).distance(poly.intersection(ray))
+            d = Point(p).distance(robust_intersection(poly, ray))
             if d > tol.snap and (best is None or d < best[0]):
                 best = (d, v)
         if best is not None:
@@ -80,7 +80,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
             continue
         holes = holes_of(wall_solid(live, columns, tol, cfg, extra=[hp]))
         created = [h for h in holes if h.area >= vc["min_room_area_m2"]
-                   and not any(abs(h.area - b.area) < 0.01 * b.area and h.intersection(b).area > 0.98 * h.area for b in base_holes)]
+                   and not any(abs(h.area - b.area) < 0.01 * b.area and robust_intersection(h, b).area > 0.98 * h.area for b in base_holes)]
         if not created:
             continue
         conf = rc["hypothesis_confidence"]

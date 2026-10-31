@@ -9,7 +9,7 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import inscribed_width, mrr_dims, polygons_of, thin_fraction
+from ..geometry.geometric_utils import inscribed_width, mrr_dims, polygons_of, thin_fraction, robust_difference
 from ..geometry.geometry_adapter import ArcPrim, Segment, Stroke, build_arcs, build_strokes
 from ..models.base_entity import IdFactory
 from ..preprocessing.layer_analyzer import LayerProfile, analyze_layers
@@ -126,7 +126,7 @@ def loops_to_polygons(loops) -> list[Polygon]:
         else:
             for k in range(len(shells) - 1, -1, -1):
                 if shells[k].contains(p.representative_point()):
-                    shells[k] = shells[k].difference(p)
+                    shells[k] = robust_difference(shells[k], p)
                     break
     out = []
     for s in shells:

@@ -7,10 +7,11 @@
 """
 from __future__ import annotations
 
+from ..geometry.geometric_utils import robust_union, robust_intersection
+
 import networkx as nx
 import numpy as np
 from shapely.geometry import LineString, Point
-from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from ..geometry.endpoint_processor import cluster_centers, cluster_points
@@ -21,7 +22,7 @@ def build_axis_graph(walls, tol) -> nx.Graph:
     axes = [(w.id, w.axis) for w in walls if not w.axis.is_empty and w.axis.length > 0]
     if not axes:
         return G
-    noded = unary_union([a for _, a in axes])
+    noded = robust_union([a for _, a in axes])
     pieces = list(getattr(noded, "geoms", [noded]))
     pieces = [p for p in pieces if isinstance(p, LineString) and p.length > 0]
     if not pieces:
@@ -64,7 +65,7 @@ def build_wall_graph(walls, tol) -> nx.Graph:
             if j <= i:
                 continue
             if pa.intersects(polys[j]):
-                inter = pa.intersection(polys[j])
+                inter = robust_intersection(pa, polys[j])
                 c = inter.centroid
                 G.add_edge(walls[i].id, walls[j].id, point=(c.x, c.y))
     return G
