@@ -14,8 +14,9 @@ from __future__ import annotations
 import math
 
 from shapely.geometry import LineString, Point
+from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import canonical_dir, dot, normal, robust_intersection
+from ..geometry.geometric_utils import robust_union, canonical_dir, dot, normal, robust_intersection
 from ..models.base_entity import Status
 from ..models.room import Room
 from ..models.wall import Wall
@@ -50,8 +51,11 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         if best is not None:
             q = (p[0] + out[0] * best[0], p[1] + out[1] * best[0])
             proposals.append((p, q, w, best[1].id, "collinear extension"))
+    etree = STRtree([Point(e[2]) for e in ends])
     for i in range(len(ends)):
-        for j in range(i + 1, len(ends)):
+        for j in sorted(int(k) for k in etree.query(Point(ends[i][2]).buffer(maxlen))):
+            if j <= i:
+                continue
             (wa, ea, pa), (wb, eb, pb) = ends[i], ends[j]
             d = math.dist(pa, pb)
             if d <= tol.snap or d > maxlen:
@@ -60,7 +64,8 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
             if max(abs(dot(u, wa.u)), abs(dot(u, wb.u))) < 0.985 and min(abs(dot(u, wa.u)), abs(dot(u, wb.u))) > 0.17:
                 continue
             proposals.append((pa, pb, wa, wb.id, "link free ends"))
-    base_holes = [h for h in holes_of(wall_solid(live, columns, tol, cfg)) if h.area >= vc["min_room_area_m2"]]
+    base_solid = wall_solid(live, columns, tol, cfg)
+    base_holes = [h for h in holes_of(base_solid) if h.area >= vc["min_room_area_m2"]]
     kept = []
     new_rooms = []
     seen = set()
@@ -78,7 +83,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         hp = hyp.polygon(max(tol.snap * 2, 0.01))
         if hp is None:
             continue
-        holes = holes_of(wall_solid(live, columns, tol, cfg, extra=[hp]))
+        holes = holes_of(robust_union([base_solid, hp]))   # the base solid is reused: only the proposal is added
         created = [h for h in holes if h.area >= vc["min_room_area_m2"]
                    and not any(abs(h.area - b.area) < 0.01 * b.area and robust_intersection(h, b).area > 0.98 * h.area for b in base_holes)]
         if not created:

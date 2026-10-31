@@ -15,6 +15,7 @@ import math
 
 import numpy as np
 from shapely.geometry import Point
+from shapely.strtree import STRtree
 
 from ..geometry.geometric_utils import angle_diff, dir_angle, dot, frame_point, normal, robust_union, robust_intersection
 from ..models.base_entity import Status
@@ -80,38 +81,69 @@ class CandidateResolver:
 
     # ------------------------------------------------------------------
     def _merge_straight(self, walls, tol, log):
+        """Merge overlapping same-band candidates (spatially indexed: only neighbours are compared)."""
         straight = [w for w in walls if w.kind in ("straight", "centerline")]
         other = [w for w in walls if w.kind not in ("straight", "centerline")]
         straight.sort(key=lambda w: (0 if w.thickness else 1, -w.length))
+        n = len(straight)
+        if n == 0:
+            return other
+        boxes = [w.axis.buffer(max(w.thickness or 0, tol.snap * 2), cap_style=2) for w in straight]
+        tree = STRtree(boxes)
+        parent = list(range(n))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+        for i, w in enumerate(straight):
+            for j in tree.query(boxes[i]):
+                j = int(j)
+                if j <= i:
+                    continue
+                v = straight[j]
+                if not same_band(w, v, tol):
+                    continue
+                c, s0, s1 = aligned(v, w.u)
+                if min(w.s1, s1) - max(w.s0, s0) <= tol.snap:
+                    continue
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+        groups: dict[int, list[int]] = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(i)
         out: list[Wall] = []
-        for w in straight:
-            for m in out:
-                if not same_band(m, w, tol):
-                    continue
-                c, s0, s1 = aligned(w, m.u)
-                if min(m.s1, s1) - max(m.s0, s0) <= tol.snap:
-                    continue
-                # merge w into m
-                Lm, Lw = m.length, s1 - s0
-                if m.thickness and w.thickness:
-                    m.thickness = (m.thickness * Lm + w.thickness * Lw) / (Lm + Lw)
-                elif w.thickness and not m.thickness:
-                    m.thickness, m.thickness_source, m.kind = w.thickness, w.thickness_source, "straight"
-                if m.thickness_source == "measured" and w.thickness_source in ("mline", "polyline_width"):
-                    m.thickness_source = w.thickness_source
-                    m.thickness = w.thickness
-                if (w.thickness is not None) == (m.thickness is not None):
-                    m.c = (m.c * Lm + c * Lw) / (Lm + Lw)
-                m.s0, m.s1 = min(m.s0, s0), max(m.s1, s1)
-                di = m.detected_interval or (m.s0, m.s1)
-                m.detected_interval = (min(di[0], s0), max(di[1], s1))
-                m.absorb(w)
-                m.face_segments |= w.face_segments
+        for root in sorted(groups):
+            idx = sorted(groups[root])
+            m = straight[idx[0]]
+            for k in idx[1:]:
+                self._merge_pair(m, straight[k])
                 log["merged_walls"] += 1
-                break
-            else:
-                out.append(w)
+            out.append(m)
         return out + other
+
+    @staticmethod
+    def _merge_pair(m, w):
+        c, s0, s1 = aligned(w, m.u)
+        Lm, Lw = m.length, s1 - s0
+        if m.thickness and w.thickness:
+            m.thickness = (m.thickness * Lm + w.thickness * Lw) / (Lm + Lw)
+        elif w.thickness and not m.thickness:
+            m.thickness, m.thickness_source, m.kind = w.thickness, w.thickness_source, "straight"
+        if m.thickness_source == "measured" and w.thickness_source in ("mline", "polyline_width"):
+            m.thickness_source = w.thickness_source
+            m.thickness = w.thickness
+        if (w.thickness is not None) == (m.thickness is not None):
+            m.c = (m.c * Lm + c * Lw) / (Lm + Lw)
+        m.s0, m.s1 = min(m.s0, s0), max(m.s1, s1)
+        di = m.detected_interval or (m.s0, m.s1)
+        m.detected_interval = (min(di[0], s0), max(di[1], s1))
+        m.absorb(w)
+        m.face_segments |= w.face_segments
+        if getattr(w, "face_raw", None):
+            m.face_raw = [a | b for a, b in zip(getattr(m, "face_raw", None) or [set(), set()], w.face_raw)]
 
     def _attach_layer(self, walls, layer_lw, log):
         by_seg: dict[str, list[Wall]] = {}
@@ -182,11 +214,15 @@ class CandidateResolver:
         for o in doors + windows:
             if o.footprint is not None and o.confidence >= self.cfg["detection"]["status_thresholds"]["review"]:
                 regions.append((o, o.footprint.buffer(tol.snap * 2)))
+        if not regions:
+            return
+        tree = STRtree([fp for _, fp in regions])
         for w in walls:
             p = w.polygon(fallback_thickness=tol.snap * 2)
             if p is None or p.area <= 0:
                 continue
-            for o, fp in regions:
+            for k in tree.query(p, predicate="intersects"):
+                o, fp = regions[int(k)]
                 if robust_intersection(fp, p).area >= 0.8 * p.area:
                     if o.type == "window" and o.depth and (not w.thickness or w.thickness > o.depth * 0.9):
                         continue  # the wall band contains the window: only thinner glazing pairs are vetoed
@@ -212,24 +248,32 @@ class CandidateResolver:
 
     def _column_conflicts(self, walls, columns, tol, log):
         cols = [(c, c.polygon.buffer(tol.snap * 2)) for c in columns if c.status != Status.REJECTED]
+        if not cols:
+            return
+        tree = STRtree([cp for _, cp in cols])
         for w in walls:
             p = w.polygon(fallback_thickness=tol.snap * 2)
             if p is None or p.area <= 0:
                 continue
-            for c, cp in cols:
+            for k in tree.query(p, predicate="intersects"):
+                c, cp = cols[int(k)]
                 if robust_intersection(cp, p).area >= 0.7 * p.area:
                     w.veto(f"inside column {c.id}")
                     log["walls_rejected_by_columns"] += 1
                     break
 
     def _door_window_conflicts(self, doors, windows, tol):
+        wins = [w for w in windows if w.footprint is not None]
+        if not wins:
+            return
+        tree = STRtree([w.footprint for w in wins])
         for d in doors:
             if d.footprint is None:
                 continue
-            for w in windows:
-                if w.footprint is None:
-                    continue
-                if robust_intersection(w.footprint, d.footprint.buffer(tol.snap)).area > 0.5 * w.footprint.area:
+            dfp = d.footprint.buffer(tol.snap)
+            for k in tree.query(dfp, predicate="intersects"):
+                w = wins[int(k)]
+                if robust_intersection(w.footprint, dfp).area > 0.5 * w.footprint.area:
                     loser = w if d.confidence >= w.confidence else d
                     loser.notes.append("conflicting door/window interpretation")
                     loser.add_evidence("width_plausibility", 0.0)
@@ -244,16 +288,25 @@ class CandidateResolver:
     def _overlap_conflicts(self, walls, tol, log):
         live = [w for w in walls if w.status != Status.REJECTED and w.polygon() is not None]
         live.sort(key=lambda w: -w.confidence)
-        kept = []
-        for w in live:
-            p = w.polygon()
-            for k in kept:
-                if k.kind == w.kind == "straight" and abs(dot(k.u, w.u)) < 0.95:
+        if not live:
+            return
+        polys = [w.polygon() for w in live]
+        tree = STRtree(polys)
+        kept: set[int] = set()
+        for i, w in enumerate(live):
+            p = polys[i]
+            vetoed = False
+            for k in tree.query(p, predicate="intersects"):
+                k = int(k)
+                if k not in kept:
+                    continue
+                o = live[k]
+                if o.kind == w.kind == "straight" and abs(dot(o.u, w.u)) < 0.95:
                     continue  # crossing walls at junctions are expected
-                inter = robust_intersection(k.polygon(), p).area
-                if inter >= 0.6 * p.area:
-                    w.veto(f"overlaps stronger candidate {k.id}")
+                if robust_intersection(polys[k], p).area >= 0.6 * p.area:
+                    w.veto(f"overlaps stronger candidate {o.id}")
                     log["conflicts"] += 1
+                    vetoed = True
                     break
-            else:
-                kept.append(w)
+            if not vetoed:
+                kept.add(i)

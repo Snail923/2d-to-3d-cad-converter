@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 
 from shapely.geometry import LineString, Point
+from shapely.strtree import STRtree
 
 from ..classification.candidate_resolver import aligned, same_band
 from ..geometry.geometric_utils import dot, frame_point, line_intersection, rect_polygon, robust_intersection
@@ -42,12 +43,51 @@ class OpeningReconstructor:
         self.log = {"hosted": 0, "unidentified": 0, "small_gaps_closed": 0, "merged_across": 0,
                     "extended_across": 0, "hosted_on_continuous_wall": 0, "unhosted": 0}
 
+    # ------------------------------------------------------------------ spatial index
+    def _index(self, live, symbols):
+        """Index of the original walls; merged-away walls resolve to the wall that absorbed them.
+        Walls only grow during this stage (by at most an opening width + junction), which the
+        query padding covers."""
+        self._orig = list(live)
+        self._tree = STRtree([w.axis.buffer(max(w.thickness or 0, self.tol.snap * 2)) for w in self._orig])
+        self._alias: dict[int, Wall] = {}
+        self._live_ids = {id(w) for w in live}
+        self._pad = self.max_symbol_open + 3 * self.max_t + self.tol.snap * 4
+        syms = [o for o in symbols if o.status != Status.REJECTED]
+        self._syms = syms
+        geoms = [LineString([o.p0, o.p1] if o.p0 != o.p1 else [o.p0, (o.p0[0] + 1e-6, o.p0[1])]).buffer(0.5) for o in syms]
+        self._stree = STRtree(geoms) if geoms else None
+
+    def _resolve(self, w):
+        while id(w) in self._alias:
+            w = self._alias[id(w)]
+        return w
+
+    def _near(self, geom, pad=None):
+        pad = self._pad if pad is None else pad
+        minx, miny, maxx, maxy = geom.bounds
+        from shapely.geometry import box
+        out, seen = [], set()
+        for k in sorted(int(i) for i in self._tree.query(box(minx - pad, miny - pad, maxx + pad, maxy + pad))):
+            v = self._resolve(self._orig[k])
+            if id(v) in seen or id(v) not in self._live_ids:
+                continue
+            seen.add(id(v))
+            out.append(v)
+        return out
+
+    def _near_symbols(self, w, a, b):
+        if self._stree is None:
+            return []
+        slot = LineString([w.point_at(a), w.point_at(b)]).buffer((w.thickness or 0) + 0.6)
+        return [self._syms[int(k)] for k in sorted(int(i) for i in self._stree.query(slot))]
+
     # ------------------------------------------------------------------ helpers
     def _connected(self, w: Wall, e: int, walls) -> bool:
         p = w.point_at(w.s1 if e else w.s0)
         pt = Point(p)
         r = max(self.tol.snap * 2, 1e-4)
-        for v in walls:
+        for v in self._near(pt, r + 3 * self.max_t + self.tol.snap * 4):
             if v is w:
                 continue
             poly = v.polygon(self.tol.snap * 2)
@@ -62,7 +102,7 @@ class OpeningReconstructor:
         far = (p[0] + out[0] * (self.max_symbol_open + 1.0), p[1] + out[1] * (self.max_symbol_open + 1.0))
         ray = LineString([p, far])
         best = None
-        for v in walls:
+        for v in self._near(ray, 3 * self.max_t + self.tol.snap * 4):
             if v is w or v.kind not in ("straight", "centerline", "arc", "polygon"):
                 continue
             if v.kind in ("straight", "centerline") and same_band(w, v, self.tol):
@@ -130,6 +170,7 @@ class OpeningReconstructor:
         generic: list[Opening] = []
         live = [w for w in walls if w.status != Status.REJECTED]
         self.max_t = max([w.thickness or 0.0 for w in live] + [tol.snap])
+        self._index(live, symbols)
         queue = [(w, e) for w in live if w.kind in ("straight", "centerline") for e in (0, 1)]
         done = set()
         while queue:
@@ -149,9 +190,12 @@ class OpeningReconstructor:
                 if kind != "collinear" or gap > self.max_symbol_open + 2 * self.max_t:
                     continue
                 ca, cb = self._clear_interval(w, a, b, live, v)
-                match = self._match_symbol(w, a, b, symbols, relative_to_chord=True)
-                if match is None and (self._crossed(w, a, b, live, v) or not (self.min_open <= cb - ca <= self.max_open)):
-                    continue  # e.g. partitions facing each other across a corridor
+                match = self._match_symbol(w, a, b, self._near_symbols(w, a, b), relative_to_chord=True)
+                if match is None:
+                    # beside a junction only a door/window symbol justifies continuing the wall: an
+                    # unexplained gap here (alley between buildings, partitions facing each other across
+                    # a corridor) is left open and reported instead of being bridged
+                    continue
                 host = self._merge_or_extend(w, e, kind, v, gap, live, note="bridged opening beside junction")
                 if match is not None:
                     score, o, chord = match
@@ -174,7 +218,7 @@ class OpeningReconstructor:
                 continue
             if gap > self.max_symbol_open:
                 continue
-            match = self._match_symbol(w, a, b, symbols)
+            match = self._match_symbol(w, a, b, self._near_symbols(w, a, b))
             if gap > self.max_open and match is None:
                 continue
             ca, cb = self._clear_interval(w, a, b, live, v)
@@ -191,7 +235,8 @@ class OpeningReconstructor:
             if o.host_wall is not None or o.status == Status.REJECTED:
                 continue
             best = None
-            for w in live:
+            chord = LineString([o.p0, o.p1]) if o.p0 != o.p1 else Point(o.p0)
+            for w in self._near(chord, 0.6 + self.max_t):
                 if w.kind not in ("straight", "centerline"):
                     continue
                 m = self._match_symbol(w, w.s0, w.s1, [o], relative_to_chord=True)
@@ -229,7 +274,9 @@ class OpeningReconstructor:
         """Largest part of slot [a, b] on w's band that is not covered by other walls."""
         t = w.thickness or self.tol.snap * 2
         slot = rect_polygon(w.u, w.c, a, b, t * 0.98)
-        others = [v.polygon(self.tol.snap * 2) for v in walls if v is not w and v is not partner]
+        slot_geom = rect_polygon(w.u, w.c, a, b, t)
+        others = [v.polygon(self.tol.snap * 2) for v in self._near(slot_geom, 3 * self.max_t)
+                  if v is not w and v is not partner]
         cover = [p for p in others if p is not None and p.intersects(slot)]
         if not cover:
             return a, b
@@ -250,7 +297,8 @@ class OpeningReconstructor:
         """True when another wall runs straight across the slot (it continues on both sides of w's band)."""
         t = w.thickness or self.tol.snap * 2
         n = (-w.u[1], w.u[0])
-        for v in walls:
+        slot_geom = rect_polygon(w.u, w.c, a, b, t)
+        for v in self._near(slot_geom, 3 * self.max_t):
             if v is w or v is partner or v.kind not in ("straight", "centerline"):
                 continue
             if abs(dot(v.u, w.u)) > 0.95:
@@ -277,6 +325,8 @@ class OpeningReconstructor:
         if kind == "collinear":
             merge_into(w, v, note, None)
             live.remove(v)
+            self._alias[id(v)] = w
+            self._live_ids.discard(id(v))
             self.log["merged_across"] += 1
             return w
         # extend w across the gap to the axis of the wall it reaches (or to its face for

@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 
 from shapely.geometry import Point
+from shapely.strtree import STRtree
 
 from ..geometry.geometric_utils import dot, frame_point, line_intersection
 from ..models.wall import Wall
@@ -32,11 +33,17 @@ def resolve_junctions(walls: list[Wall], tol, cfg) -> int:
     straight = [w for w in walls if w.kind in ("straight", "centerline")]
     count = 0
     plan = []
+    if not straight:
+        return 0
+    maxt = max([w.thickness or 0.0 for w in straight] + [tol.snap * 4])
+    search = factor * maxt * 2 + tol.snap * 4
+    tree = STRtree([w.axis for w in straight])
     for w in straight:
         for e in (0, 1):
             p, out = _end(w, e)
             best = None
-            for v in straight:
+            for k in tree.query(Point(p).buffer(search)):
+                v = straight[int(k)]
                 if v is w:
                     continue
                 sin = abs(w.u[0] * v.u[1] - w.u[1] * v.u[0])

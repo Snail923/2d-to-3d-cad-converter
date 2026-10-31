@@ -9,6 +9,8 @@ let py = null;
 let bridge = null;
 
 function progress(msg) { self.postMessage({ type: "progress", msg }); }
+// called from Python (architectural_converter.web_bridge._progress) while a drawing is processed
+self.pyProgress = (msg) => progress(String(msg));
 
 async function init(base) {
   progress("Loading the Python runtime (Pyodide " + PYODIDE_VERSION + ")…");

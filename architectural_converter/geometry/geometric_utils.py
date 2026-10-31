@@ -154,7 +154,7 @@ def inscribed_width(poly: Polygon, tolerance: float | None = None) -> float:
         if p.area <= 0:
             continue
         minx, miny, maxx, maxy = p.bounds
-        tol = tolerance or max(min(maxx - minx, maxy - miny) / 200.0, 1e-6)
+        tol = tolerance or max(min(maxx - minx, maxy - miny) / 40.0, 1e-6)
         try:
             c = polylabel(p, tolerance=tol)
         except Exception:
@@ -234,18 +234,21 @@ GRID = 1e-6
 
 
 def robust_union(geoms, grid: float = GRID):
+    """Union with snap rounding: GEOS snaps the inputs to the grid itself when grid_size is set."""
     import shapely
     geoms = [g for g in geoms if g is not None and not g.is_empty]
     if not geoms:
         return GeometryCollection()
-    return shapely.union_all(shapely.set_precision(geoms, grid), grid_size=grid)
+    return shapely.union_all(geoms, grid_size=grid)
 
 
 def robust_difference(a, b, grid: float = GRID):
     import shapely
-    return shapely.difference(shapely.set_precision(a, grid), shapely.set_precision(b, grid), grid_size=grid)
+    return shapely.difference(a, b, grid_size=grid)
 
 
 def robust_intersection(a, b, grid: float = GRID):
     import shapely
-    return shapely.intersection(shapely.set_precision(a, grid), shapely.set_precision(b, grid), grid_size=grid)
+    if not a.intersects(b):   # cheap predicate first: most pairs do not touch
+        return GeometryCollection()
+    return shapely.intersection(a, b, grid_size=grid)

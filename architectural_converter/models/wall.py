@@ -76,6 +76,19 @@ class Wall(ArchitecturalEntity):
         return LineString()
 
     def polygon(self, fallback_thickness: float | None = None) -> Polygon | None:
+        """Wall body. Cached on the current geometry (walls are mutated during reconstruction)."""
+        key = (self.kind, self.u, self.c, self.s0, self.s1, self.thickness, fallback_thickness,
+               tuple(sorted(self.arc.items())) if self.arc else None, id(self.shape))
+        cache = self.__dict__.setdefault("_poly_cache", {})
+        if key in cache:
+            return cache[key]
+        if len(cache) > 8:
+            cache.clear()
+        p = self._polygon(fallback_thickness)
+        cache[key] = p
+        return p
+
+    def _polygon(self, fallback_thickness: float | None = None) -> Polygon | None:
         t = self.thickness if self.thickness else fallback_thickness
         if self.kind == "polygon":
             return self.shape

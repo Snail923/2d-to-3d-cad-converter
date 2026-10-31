@@ -35,8 +35,13 @@ def validate_openings(report, openings, walls, tol, cfg):
         if any("conflicting door/window" in n for n in o.notes):
             report.add("opening", "door_window_conflict", "warning", o, loc,
                        f"{o.id} has conflicting door/window evidence.", "Choose the correct opening type.", 0.6)
-    for i, a in enumerate(live):
-        for b in live[i + 1:]:
+    by_host: dict = {}
+    for o in live:
+        if o.host_wall:
+            by_host.setdefault(o.host_wall, []).append(o)
+    opairs = [(g[i], g[j]) for g in by_host.values() for i in range(len(g)) for j in range(i + 1, len(g))]
+    for a, b in opairs:
+        if True:
             if a.host_wall and a.host_wall == b.host_wall and a.host_interval and b.host_interval:
                 if min(a.host_interval[1], b.host_interval[1]) - max(a.host_interval[0], b.host_interval[0]) > tol.snap:
                     report.add("opening", "overlapping_openings", "warning", a, a.center,

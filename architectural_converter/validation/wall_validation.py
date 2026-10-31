@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from ..geometry.geometric_utils import robust_intersection
 
+from shapely.strtree import STRtree
+
 from ..classification.candidate_resolver import same_band
 from ..models.base_entity import Status
 from ..topology.graph_builder import free_ends
@@ -19,8 +21,14 @@ def validate_walls(report, walls, columns, tol, cfg):
                    0.6 if w.openings else 0.7)
     polys = [(w, w.polygon(tol.snap * 2)) for w in live]
     polys = [(w, p) for w, p in polys if p is not None]
+    tree = STRtree([pp for _, pp in polys]) if polys else None
+    pairs = []
     for i, (a, pa) in enumerate(polys):
-        for b, pb in polys[i + 1:]:
+        for j in sorted(int(k) for k in tree.query(pa, predicate="intersects")):
+            if j > i:
+                pairs.append((a, pa) + polys[j])
+    for a, pa, b, pb in pairs:
+        if True:
             if not pa.intersects(pb):
                 continue
             inter = robust_intersection(pa, pb)

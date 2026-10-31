@@ -73,6 +73,7 @@ class WindowDetector(BaseDetector):
         lo, hi = cfg["width_m"]
         th = self.cfg["thickness"]
         idx = [k for k, st in enumerate(ctx.strokes) if lo * 0.9 <= st.length <= hi]
+        in_range = set(idx)
         used = set()
         out = []
         for a in idx:
@@ -81,8 +82,10 @@ class WindowDetector(BaseDetector):
             A = ctx.strokes[a]
             n = normal(A.u)
             group = [a]
-            for b in idx:
-                if b == a or b in used:
+            near = [int(k) for k in ctx.stroke_tree.query(A.line().buffer(tol.thickness_max * 1.2 + tol.snap))] \
+                if ctx.stroke_tree is not None else idx
+            for b in sorted(near):
+                if b == a or b in used or b not in in_range:
                     continue
                 B = ctx.strokes[b]
                 if angle_diff(A.angle, B.angle) > tol.pair_angle_tol(A.length, B.length):

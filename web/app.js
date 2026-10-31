@@ -23,6 +23,14 @@ function startWorker() {
   };
 }
 startWorker();
+$("#cancelJob").addEventListener("click", async () => {
+  if (!confirm("Stop processing this drawing? The engine will restart (about 10 s).")) return;
+  setStatus("Cancelled. Restarting the engine…");
+  $("#cancelJob").style.display = "none";
+  try { await recoverEngine(); setStatus("Cancelled. Engine ready — you can load another drawing."); }
+  catch (e) { setStatus("Engine restart failed: " + e.message); }
+  S.busy = false;
+});
 // A native (GEOS) crash leaves the Python runtime unusable: start a fresh engine.
 async function recoverEngine() {
   for (const p of pending.values()) p.reject(new Error("engine restarted"));
@@ -48,7 +56,39 @@ const S = {
 function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {} }; }
 
 function setStatus(t) { $("#status").textContent = t; }
-function setLoading(msg) { if (msg === null) { $("#loading").classList.add("hidden"); return; } $("#loading").classList.remove("hidden"); $("#loadingMsg").textContent = msg; }
+// loading panel with a live step log, elapsed time and a cancel button for long drawings
+let jobStart = null, jobTimer = null, lastStep = null;
+function setLoading(msg) {
+  if (msg === null) {
+    $("#loading").classList.add("hidden");
+    clearInterval(jobTimer); jobTimer = null; jobStart = null; lastStep = null;
+    return;
+  }
+  $("#loading").classList.remove("hidden");
+  $("#loadingMsg").textContent = msg;
+  if (jobStart) {
+    const log = $("#loadingLog");
+    if (log.lastElementChild) log.lastElementChild.classList.add("done");
+    const li = document.createElement("li");
+    const t = ((performance.now() - jobStart) / 1000).toFixed(1);
+    li.textContent = `[${t}s] ${msg}`;
+    log.appendChild(li); log.scrollTop = log.scrollHeight;
+    lastStep = performance.now();
+  }
+}
+function startJob(title, cancellable = true) {
+  jobStart = performance.now(); lastStep = jobStart;
+  $("#loadingLog").innerHTML = "";
+  $("#cancelJob").style.display = cancellable ? "inline-block" : "none";
+  setLoading(title);
+  clearInterval(jobTimer);
+  jobTimer = setInterval(() => {
+    if (!jobStart) return;
+    const total = (performance.now() - jobStart) / 1000, step = (performance.now() - lastStep) / 1000;
+    $("#loadingTime").textContent = `elapsed ${total.toFixed(0)} s · current step ${step.toFixed(0)} s` +
+      (step > 60 ? " — large drawings can take several minutes in the browser; the engine is still working" : "");
+  }, 500);
+}
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function fmt(v, d = 2) { return v === null || v === undefined ? "<span class='muted'>unknown</span>" : (typeof v === "number" ? v.toFixed(d) : esc(v)); }
 function download(name, data, type) {
@@ -108,13 +148,14 @@ async function runFile(name, buf) {
   S.busy = true;
   S.fileName = name; S.fileBytes = buf.slice(0);
   S.corrections = emptyCorr(); S.history = [];
-  setLoading(`Analysing ${name}… (ingestion → detection → reconstruction → topology → validation → 3D)`);
+  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
   const t0 = performance.now();
   try {
     const res = await call("process", { name, bytes: buf }, [buf]);
     load(JSON.parse(res));
     setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   } catch (e) {
+    if (/engine restarted/.test(e.message)) return;  // cancelled by the user
     setStatus("Error: " + e.message + " — restarting the engine…");
     alert("Processing failed:\n" + e.message + "\n\nThe engine will be restarted. Please report the drawing if this repeats.");
     try { await recoverEngine(); setStatus("Engine restarted after an error. You can load another drawing."); } catch (e2) { setStatus("Engine restart failed: " + e2.message); }
@@ -127,7 +168,7 @@ async function runFile(name, buf) {
 async function rerun() {
   if (!S.model || S.busy) return;
   S.busy = true;
-  setLoading("Re-running resolution, reconstruction, topology and validation with your corrections…");
+  startJob("Re-running resolution, reconstruction, topology and validation with your corrections…");
   try {
     const t0 = performance.now();
     load(JSON.parse(await call("rerun", { corrections: S.corrections })), true);

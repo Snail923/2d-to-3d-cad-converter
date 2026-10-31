@@ -111,3 +111,7 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 #svg.hide-exterior .cls-exterior_wall, #svg.hide-interior .cls-interior_wall, #svg.hide-partition .cls-partition_wall,
 #svg.hide-review .wall.st-NEEDS_REVIEW, #svg.hide-rejected .st-REJECTED, #svg.hide-doors .t-door, #svg.hide-windows .t-window,
 #svg.hide-openings .t-opening, #svg.hide-columns .columns, #svg.hide-hyps .hyps, #svg.hide-issues .issues, #svg.hide-axes .axes { display: none; }
+
+.loadlog { text-align: left; max-height: 180px; overflow: auto; margin: 10px 0; padding-left: 22px; color: #4a5168; }
+.loadlog li.done { color: #9aa0b1; }
+#loadingTime { margin-top: 6px; color: #3a6df0; }

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from ..geometry.geometric_utils import robust_intersection
 
+from shapely.strtree import STRtree
+
 from ..models.base_entity import Status
 
 
@@ -39,8 +41,11 @@ def validate_rooms(report, rooms, labels, tol, cfg):
             report.add("room", "area_mismatch", "warning", r, loc,
                        f"Room {r.id} area {r.area:.2f} m² differs from the annotated {r.area_text:.2f} m².",
                        "Check the room boundary or the drawing scale.", 0.6)
-    for i, a in enumerate(live):
-        for b in live[i + 1:]:
+    rtree = STRtree([r.polygon for r in live]) if live else None
+    rpairs = [(live[i], live[j]) for i in range(len(live))
+              for j in sorted(int(k) for k in rtree.query(live[i].polygon, predicate="intersects")) if j > i]
+    for a, b in rpairs:
+        if True:
             if a.polygon.intersects(b.polygon):
                 inter = robust_intersection(a.polygon, b.polygon).area
                 if inter > 0.05 * min(a.area, b.area):

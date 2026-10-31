@@ -77,12 +77,26 @@ class PipelineState:
 
 
 class ExtractionPipeline:
-    def __init__(self, config: PipelineConfig | dict | None = None):
+    STAGE_LABELS = {"ingest": "Reading DXF entities and blocks", "preprocess": "Units, tolerances, cleaning",
+                    "context": "Layer semantics, block symbols, texts", "detect": "Detecting walls, doors, windows, columns",
+                    "resolve": "Resolving candidates", "reconstruct": "Reconstructing walls and openings",
+                    "topology": "Topology and rooms", "classify": "Classifying", "validate": "Validating",
+                    "export": "Building the model"}
+
+    def __init__(self, config: PipelineConfig | dict | None = None, progress=None):
         if config is None:
             config = PipelineConfig()
         elif isinstance(config, dict):
             config = PipelineConfig(config)
         self.cfg = config
+        self.progress = progress  # optional callable(message: str) for live progress reporting
+
+    def _report(self, msg: str) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(msg)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ public API
     def process(self, input_file: str, corrections: dict | None = None, until: str = "export",
@@ -111,6 +125,13 @@ class ExtractionPipeline:
         return st
 
     def run_stage(self, st: PipelineState, stage: str) -> PipelineState:
+        n = STAGES.index(stage) + 1
+        extra = ""
+        if stage != "ingest" and st.drawing is not None:
+            extra = f" · {len(st.drawing.raw_entities):,} entities"
+            if st.segments:
+                extra += f", {len(st.segments):,} segments"
+        self._report(f"Step {n}/{len(STAGES)}: {self.STAGE_LABELS.get(stage, stage)}{extra}")
         t0 = time.perf_counter()
         getattr(self, f"_stage_{stage}")(st)
         st.timings[stage] = round(time.perf_counter() - t0, 4)
@@ -149,6 +170,7 @@ class ExtractionPipeline:
             if name == "text_detector":
                 continue  # labels are produced while building the context
             det = DETECTORS[name](self.cfg)
+            self._report(f"Step 4/{len(STAGES)}: detector {name.replace('_', ' ')}")
             t0 = time.perf_counter()
             try:
                 ctx.candidates[name] = det.detect(st.drawing, ctx)

@@ -21,6 +21,7 @@ _S: dict = {}
 
 
 def _payload(st, cfg) -> str:
+    _progress("Building the 3D model and the review view")
     m3 = build_3d(st.model, cfg)
     ctx = st.ctx
     out = {
@@ -35,9 +36,18 @@ def _payload(st, cfg) -> str:
     return json.dumps(out, default=_jsonable, separators=(",", ":"))
 
 
+def _progress(msg: str) -> None:
+    """Forward progress to the browser (a JS function registered by the worker), if present."""
+    try:
+        import js  # only available inside Pyodide
+        js.pyProgress(msg)
+    except Exception:
+        pass
+
+
 def process(path: str, corrections_json: str | None = None, config_json: str | None = None) -> str:
     cfg = PipelineConfig(json.loads(config_json) if config_json else None)
-    pipe = ExtractionPipeline(cfg)
+    pipe = ExtractionPipeline(cfg, progress=_progress)
     corr = json.loads(corrections_json) if corrections_json else None
     st = pipe.process(path, corrections=corr)
     _S.update(pipe=pipe, st=st, cfg=cfg)

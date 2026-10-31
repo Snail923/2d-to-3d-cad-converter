@@ -7,6 +7,8 @@ Gaps of opening size are *not* merged here (see ``opening_reconstruction``)."""
 from __future__ import annotations
 
 
+from shapely.strtree import STRtree
+
 from ..classification.candidate_resolver import aligned, same_band
 from ..geometry.geometric_utils import rect_polygon, robust_union, robust_intersection
 from ..models.wall import Wall
@@ -52,36 +54,45 @@ def _gap(a: Wall, b: Wall):
 def merge_collinear(walls: list[Wall], tol, covered_factor: float = 1.3) -> list[Wall]:
     walls = list(walls)
     straight = [w for w in walls if w.kind in ("straight", "centerline")]
+    if not straight:
+        return walls
     maxt = max([x.thickness or 0 for x in walls] + [tol.snap * 2])
-    i = 0
-    while i < len(straight):
+    reach = maxt * covered_factor + tol.snap
+    alive = set(range(len(straight)))
+    tree = STRtree([w.axis.buffer(reach) for w in straight])
+    bodies = [(o, o.polygon(tol.snap * 2)) for o in walls]
+    bodies = [(o, p) for o, p in bodies if p is not None]
+    btree = STRtree([p for _, p in bodies]) if bodies else None
+    for i in range(len(straight)):
+        if i not in alive:
+            continue
         a = straight[i]
-        merged = False
-        j = i + 1
-        while j < len(straight):
-            b = straight[j]
-            if not same_band(a, b, tol):
-                j += 1
-                continue
-            g0, g1 = _gap(a, b)
-            gap = g1 - g0
-            reason = None
-            if gap <= tol.snap:
-                reason = "fragment" if gap > 0 else "overlap"
-            elif gap <= maxt * covered_factor:
-                t = a.thickness or tol.snap * 2
-                gp = rect_polygon(a.u, a.c, g0, g1, t)
-                polys = [o.polygon(tol.snap * 2) for o in walls if o is not a and o is not b]
-                cover = robust_union([p for p in polys if p is not None and p.intersects(gp)])
-                if not cover.is_empty and robust_intersection(cover.buffer(tol.snap), gp).area >= 0.9 * gp.area:
-                    reason = "continuous through junction"
-            if reason:
-                merge_into(a, b, reason, (g0, g1) if gap > 0 else None)
-                walls.remove(b)
-                straight.pop(j)
-                merged = True
-                continue
-            j += 1
-        if not merged:
-            i += 1
+        changed = True
+        while changed:
+            changed = False
+            for j in sorted(int(k) for k in tree.query(a.axis.buffer(reach))):
+                if j == i or j not in alive:
+                    continue
+                b = straight[j]
+                if not same_band(a, b, tol):
+                    continue
+                g0, g1 = _gap(a, b)
+                gap = g1 - g0
+                reason = None
+                if gap <= tol.snap:
+                    reason = "fragment" if gap > 0 else "overlap"
+                elif gap <= maxt * covered_factor:
+                    t = a.thickness or tol.snap * 2
+                    gp = rect_polygon(a.u, a.c, g0, g1, t)
+                    polys = [p for o, p in (bodies[int(k)] for k in btree.query(gp, predicate="intersects"))
+                             if o is not a and o is not b] if btree is not None else []
+                    cover = robust_union(polys)
+                    if not cover.is_empty and robust_intersection(cover.buffer(tol.snap), gp).area >= 0.9 * gp.area:
+                        reason = "continuous through junction"
+                if reason:
+                    merge_into(a, b, reason, (g0, g1) if gap > 0 else None)
+                    walls.remove(b)
+                    alive.discard(j)
+                    changed = True
+                    break
     return walls
