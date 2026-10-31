@@ -1,0 +1,266 @@
+{
+  "_doc": "Configurable semantic hints for layer and block names. Names are tokenised (split on separators/camelCase, lower-cased, accents stripped). A token matches a keyword exactly, or by prefix for keywords of 4+ characters. These are HINTS only: detectors still evaluate geometry.",
+  "categories": {
+    "wall": {
+      "strong": [
+        "wall",
+        "walls",
+        "wand",
+        "waende",
+        "mur",
+        "murs",
+        "pared",
+        "paredes",
+        "muro",
+        "muri",
+        "parede",
+        "cloison",
+        "partition",
+        "partitions",
+        "masonry",
+        "brick",
+        "blockwork",
+        "drywall",
+        "mauer"
+      ],
+      "medium": [
+        "wal",
+        "wll",
+        "struct",
+        "beton",
+        "concrete",
+        "core",
+        "facade",
+        "exterior"
+      ]
+    },
+    "door": {
+      "strong": [
+        "door",
+        "doors",
+        "porte",
+        "portes",
+        "tuer",
+        "tur",
+        "puerta",
+        "puertas",
+        "porta",
+        "deur"
+      ],
+      "medium": [
+        "dr",
+        "drs",
+        "dor"
+      ]
+    },
+    "window": {
+      "strong": [
+        "window",
+        "windows",
+        "fenetre",
+        "fenetres",
+        "fenster",
+        "ventana",
+        "ventanas",
+        "janela",
+        "finestra",
+        "glaz",
+        "glazing",
+        "glass",
+        "vitrage"
+      ],
+      "medium": [
+        "win",
+        "wdw",
+        "wind"
+      ]
+    },
+    "column": {
+      "strong": [
+        "column",
+        "columns",
+        "colonne",
+        "poteau",
+        "poteaux",
+        "stutze",
+        "stuetze",
+        "pilar",
+        "columna",
+        "pillar",
+        "cols"
+      ],
+      "medium": [
+        "col",
+        "post"
+      ]
+    },
+    "furniture": {
+      "strong": [
+        "furn",
+        "furniture",
+        "mobilier",
+        "moebel",
+        "mobel",
+        "mueble",
+        "muebles",
+        "equip",
+        "equipment",
+        "fixture",
+        "fixt",
+        "sanitary",
+        "sanit",
+        "plumb",
+        "plumbing",
+        "appliance",
+        "casework",
+        "table",
+        "chair",
+        "bed",
+        "sofa",
+        "desk",
+        "sink",
+        "toilet",
+        "basin",
+        "bathtub",
+        "tub",
+        "shower",
+        "bench",
+        "plant",
+        "cabinet",
+        "wardrobe",
+        "fridge",
+        "stove",
+        "oven",
+        "couch",
+        "armchair",
+        "lamp",
+        "tree",
+        "car",
+        "seat",
+        "seating"
+      ],
+      "medium": [
+        "eqpm",
+        "fff",
+        "fix"
+      ]
+    },
+    "annotation": {
+      "strong": [
+        "text",
+        "txt",
+        "anno",
+        "annotation",
+        "tag",
+        "tags",
+        "label",
+        "note",
+        "notes",
+        "title",
+        "symb",
+        "symbol",
+        "iden"
+      ],
+      "medium": [
+        "nplt",
+        "np"
+      ]
+    },
+    "dimension": {
+      "strong": [
+        "dim",
+        "dims",
+        "dimension",
+        "dimensions",
+        "cote",
+        "cotes",
+        "cotation",
+        "bemassung",
+        "masse",
+        "cota",
+        "cotas"
+      ],
+      "medium": []
+    },
+    "grid": {
+      "strong": [
+        "grid",
+        "grids",
+        "axis",
+        "axes",
+        "axe",
+        "raster",
+        "achse",
+        "eje",
+        "ejes"
+      ],
+      "medium": []
+    },
+    "hatch": {
+      "strong": [
+        "hatch",
+        "hatching",
+        "patt",
+        "pattern",
+        "hach",
+        "schraffur",
+        "trame"
+      ],
+      "medium": [
+        "poche"
+      ]
+    },
+    "stair": {
+      "strong": [
+        "stair",
+        "stairs",
+        "escalier",
+        "treppe",
+        "escalera",
+        "strs"
+      ],
+      "medium": []
+    },
+    "area": {
+      "strong": [
+        "area",
+        "areas",
+        "room",
+        "rooms",
+        "space",
+        "spaces",
+        "zone",
+        "zones",
+        "piece",
+        "raum"
+      ],
+      "medium": [
+        "flor"
+      ]
+    },
+    "ignore": {
+      "strong": [
+        "defpoints",
+        "viewport",
+        "vport",
+        "xref"
+      ],
+      "medium": []
+    }
+  },
+  "wall_evidence": {
+    "wall": 1.0,
+    "column": 0.35,
+    "door": 0.15,
+    "window": 0.15,
+    "furniture": 0.0,
+    "annotation": 0.0,
+    "dimension": 0.0,
+    "grid": 0.0,
+    "hatch": 0.55,
+    "stair": 0.15,
+    "area": 0.2,
+    "ignore": 0.0,
+    "_unknown": 0.5
+  }
+}

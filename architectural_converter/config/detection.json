@@ -1,0 +1,176 @@
+{
+  "_doc": "Detector parameters and evidence weights.",
+  "enabled_detectors": [
+    "text_detector",
+    "symbol_analysis",
+    "layer_wall_detector",
+    "parallel_wall_detector",
+    "polyline_wall_detector",
+    "hatch_wall_detector",
+    "door_detector",
+    "window_detector",
+    "column_detector",
+    "single_line_wall_detector"
+  ],
+  "status_thresholds": {
+    "accept": 0.68,
+    "review": 0.45
+  },
+  "parallel": {
+    "min_overlap_abs_m": 0.05,
+    "min_overlap_factor_of_thickness": 0.6,
+    "max_strokes_for_full_search": 60000
+  },
+  "arc_pairs": {
+    "center_tol_factor_of_snap": 4.0,
+    "min_sweep_deg": 10.0
+  },
+  "polyline": {
+    "min_aspect": 2.5,
+    "thin_erosion_factor": 0.6,
+    "max_thin_residual": 0.08
+  },
+  "hatch": {
+    "thin_fraction_min": 0.75,
+    "coverage_for_fill_evidence": 0.6
+  },
+  "single_line": {
+    "min_length_m": 0.3,
+    "min_room_face_area_m2": 2.0,
+    "min_component_share": 0.15,
+    "double_line_share_for_strict_mode": 0.35
+  },
+  "door": {
+    "leaf_width_m": [
+      0.5,
+      1.45
+    ],
+    "sweep_deg": [
+      60.0,
+      120.0
+    ],
+    "leaf_length_tol": 0.15,
+    "double_max_width_m": 2.8,
+    "sliding_width_m": [
+      0.6,
+      3.0
+    ]
+  },
+  "window": {
+    "width_m": [
+      0.3,
+      4.0
+    ],
+    "min_lines": 2,
+    "length_match_tol": 0.06,
+    "span_coverage": 0.8,
+    "obstruction_min_consistency": 0.4
+  },
+  "column": {
+    "size_m": [
+      0.15,
+      1.5
+    ],
+    "max_aspect": 2.5,
+    "circle_radius_m": [
+      0.08,
+      0.75
+    ],
+    "min_repetition_for_grid": 3
+  },
+  "symbols": {
+    "max_symbol_extent_m": 3.2,
+    "assembly_min_extent_m": 3.0,
+    "role_min_score": 0.4
+  },
+  "weights": {
+    "wall": {
+      "parallelism": 0.8,
+      "endpoint_alignment": 0.6,
+      "thickness_plausibility": 1.3,
+      "thickness_consistency": 1.4,
+      "emptiness": 0.4,
+      "layer_match": 1.2,
+      "hatch_fill": 1.2,
+      "closed_outline": 0.6,
+      "polyline_width": 1.6,
+      "mline": 2.0,
+      "dimension_support": 1.0,
+      "topology_consistency": 1.6,
+      "network_connectivity": 1.2,
+      "cycle_support": 1.2,
+      "aspect": 0.6,
+      "thinness": 0.8,
+      "manual": 10.0
+    },
+    "door": {
+      "symbol": 2.0,
+      "name_hint": 1.0,
+      "layer_match": 0.8,
+      "swing_arc": 1.4,
+      "leaf_line": 1.2,
+      "host_wall": 1.5,
+      "width_plausibility": 1.0,
+      "gap_match": 1.2,
+      "manual": 10.0
+    },
+    "window": {
+      "symbol": 2.0,
+      "name_hint": 1.0,
+      "layer_match": 0.8,
+      "line_count": 1.2,
+      "length_match": 0.8,
+      "in_wall_band": 1.5,
+      "jambs": 0.6,
+      "host_wall": 1.5,
+      "width_plausibility": 1.0,
+      "gap_match": 1.2,
+      "not_wall_thickness": 0.8,
+      "manual": 10.0,
+      "not_furniture": 1.0
+    },
+    "opening": {
+      "gap_geometry": 1.0,
+      "host_wall": 1.0,
+      "width_plausibility": 1.0
+    },
+    "column": {
+      "size_plausibility": 1.0,
+      "shape": 0.8,
+      "filled": 1.2,
+      "layer_match": 1.2,
+      "name_hint": 1.0,
+      "repetition": 1.0,
+      "grid_alignment": 0.8,
+      "wall_contact": 0.6,
+      "not_furniture": 1.0,
+      "manual": 10.0
+    },
+    "room": {
+      "wall_support": 2.0,
+      "label": 1.2,
+      "area_text_match": 1.5,
+      "shape": 1.0,
+      "size_plausibility": 1.0,
+      "opening_access": 0.6,
+      "manual": 10.0
+    }
+  },
+  "gates": {
+    "_doc": "A candidate must agree with at least one strong evidence source; otherwise its confidence is multiplied by 'penalty'. Only applied when 'applies_if' evidence is present.",
+    "wall": {
+      "any_of": [
+        "thickness_consistency",
+        "hatch_fill",
+        "mline",
+        "polyline_width",
+        "dimension_support",
+        "manual"
+      ],
+      "layer_min": 1.01,
+      "min": 0.4,
+      "penalty": 0.75,
+      "applies_if": "thickness_plausibility"
+    }
+  }
+}

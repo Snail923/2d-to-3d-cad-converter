@@ -1,0 +1,12 @@
+{
+  "_doc": "Defaults used ONLY by the 3D reconstruction when the plan does not specify a value. Every default use is recorded in the 3D metadata.",
+  "wall_height_m": 2.8,
+  "door_height_m": 2.1,
+  "window_sill_m": 0.9,
+  "window_head_m": 2.1,
+  "opening_height_m": 2.1,
+  "slab_thickness_m": 0.15,
+  "column_height_m": 2.8,
+  "unknown_wall_thickness_m": 0.12,
+  "export_statuses": ["ACCEPTED", "NEEDS_REVIEW"]
+}

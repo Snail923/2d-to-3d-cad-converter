@@ -1,0 +1,10 @@
+{
+  "_doc": "Wall thickness search range and plausibility (metres). The range bounds the search; actual thickness classes are clustered from the drawing.",
+  "min_m": 0.05,
+  "max_m": 0.75,
+  "plausible_min_m": 0.075,
+  "plausible_max_m": 0.5,
+  "cluster_rel_tol": 0.06,
+  "cluster_abs_tol_m": 0.006,
+  "cluster_min_share": 0.04
+}

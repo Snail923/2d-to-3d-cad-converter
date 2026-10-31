@@ -1,0 +1,12 @@
+{
+  "_doc": "Wall reconstruction parameters (metres or factors).",
+  "junction_extension_factor": 1.5,
+  "min_junction_angle_deg": 20.0,
+  "opening_width_m": [0.45, 2.8],
+  "small_gap_close_max_factor_of_thickness": 1.0,
+  "symbol_host_search_factor": 1.5,
+  "hypothesis_max_length_m": 6.0,
+  "hypothesis_max_count": 40,
+  "hypothesis_confidence": 0.3,
+  "unidentified_opening_confidence": 0.5
+}

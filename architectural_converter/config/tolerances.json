@@ -1,0 +1,15 @@
+{
+  "_doc": "Geometric tolerances. All *_m values are metres AFTER unit normalisation. Snap/duplicate tolerances are estimated per drawing; these are priors and bounds.",
+  "duplicate_tol_m": 0.0005,
+  "snap_min_m": 0.001,
+  "snap_prior_m": 0.005,
+  "snap_max_m": 0.04,
+  "snap_max_fraction_of_min_thickness": 0.35,
+  "intersection_tol_factor": 0.5,
+  "angle_tol_deg": 1.0,
+  "angle_tol_max_deg": 4.0,
+  "parallel_offset_tol_fraction": 0.08,
+  "curve_sagitta_m": 0.004,
+  "precision_relative": 1e-9,
+  "topology_close_factor": 1.0
+}
