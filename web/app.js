@@ -143,41 +143,47 @@ async function loadSample() {
   await runFile(file, buf);
 }
 
-async function runFile(name, buf, disabled = []) {
+async function runFile(name, buf, disabled = [], safe = false) {
   if (S.busy) return;
   S.busy = true;
   S.fileName = name; S.fileBytes = buf.slice(0);
   S.corrections = emptyCorr(); S.history = [];
-  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` +
-    (disabled.length ? ` without ${disabled.join(", ")}` : "") + "…");
+  const notes = [...disabled.map((d) => d.replace(/_/g, " ")), ...(safe ? ["safe mode"] : [])];
+  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` + (notes.length ? ` — retry: ${notes.join(", ")}` : "") + "…");
   const t0 = performance.now();
   let retry = null;
   try {
-    const config = disabled.length ? { runtime: { disabled_detectors: disabled } } : null;
+    const runtime = {};
+    if (disabled.length) runtime.disabled_detectors = disabled;
+    if (safe) runtime.safe_mode = true;
+    const config = Object.keys(runtime).length ? { runtime } : null;
     const res = await call("process", { name, bytes: buf, config }, [buf]);
     load(JSON.parse(res));
     setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
-      (disabled.length ? ` (skipped after an engine error: ${disabled.join(", ")})` : ""));
+      (notes.length ? ` (after an engine error: ${notes.join(", ")})` : ""));
   } catch (e) {
     if (/engine restarted/.test(e.message)) return;  // cancelled by the user
-    // A native geometry error kills the Python runtime. If it happened inside one detector,
-    // restart and run again without that detector instead of losing the whole drawing.
-    const m = /detector ([a-z ]+)$/.exec(S.lastProgress || "");
+    // A native geometry error kills the Python runtime. Remember where it happened BEFORE
+    // restarting (the restart overwrites the progress log), then retry in a degraded mode.
+    const failedAt = S.lastProgress || "?";
+    const m = /detector ([a-z ]+)$/.exec(failedAt);
     const det = m ? m[1].trim().replace(/ /g, "_") : null;
-    setStatus("Engine error: " + e.message + " — restarting…");
+    setStatus("Engine error at “" + failedAt + "”: " + e.message + " — restarting…");
     try { await recoverEngine(); } catch (e2) { setStatus("Engine restart failed: " + e2.message); return; }
     if (det && !disabled.includes(det) && disabled.length < 3) {
-      retry = disabled.concat([det]);
-      setStatus(`The ${det.replace(/_/g, " ")} hit a geometry error on this drawing; re-running without it…`);
+      retry = [disabled.concat([det]), safe];
+    } else if (!safe) {
+      retry = [disabled.includes("single_line_wall_detector") ? disabled : disabled.concat(["single_line_wall_detector"]), true];
     } else {
-      setStatus("Processing failed: " + e.message + ". The engine was restarted; please report the drawing.");
-      alert("Processing failed:\n" + e.message + "\n\n(last step: " + (S.lastProgress || "?") + ")");
+      setStatus("Processing failed at “" + failedAt + "”: " + e.message);
+      alert("Processing failed even in safe mode:\n" + e.message + "\n\nStep: " + failedAt +
+        "\n\nPlease share the DXF (commit it to the repository) so it can be reproduced.");
     }
   } finally {
     setLoading(null);
     S.busy = false;
   }
-  if (retry) await runFile(name, S.fileBytes, retry);
+  if (retry) await runFile(name, S.fileBytes, retry[0], retry[1]);
 }
 
 async function rerun() {

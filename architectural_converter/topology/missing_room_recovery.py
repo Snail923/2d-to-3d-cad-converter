@@ -21,7 +21,7 @@ from ..models.base_entity import Status
 from ..models.room import Room
 from ..models.wall import Wall
 from .graph_builder import free_ends
-from .room_detector import holes_of, wall_solid
+from .room_detector import close_radius, holes_of, wall_solid
 
 
 def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_detector):
@@ -66,7 +66,8 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
                 continue
             proposals.append((pa, pb, wa, wb.id, "link free ends"))
     base_solid = wall_solid(live, columns, tol, cfg)
-    base_holes = [h for h in holes_of(base_solid) if h.area >= vc["min_room_area_m2"]]
+    rg = close_radius(tol, cfg)
+    base_holes = [h for h in holes_of(base_solid, rg) if h.area >= vc["min_room_area_m2"]]
     kept = []
     new_rooms = []
     lindex = room_detector.label_index(labels)
@@ -85,7 +86,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         hp = hyp.polygon(max(tol.snap * 2, 0.01))
         if hp is None:
             continue
-        holes = holes_of(robust_union([base_solid, hp]))   # the base solid is reused: only the proposal is added
+        holes = holes_of(robust_union([base_solid, hp.buffer(rg, join_style=2)]), rg)  # base solid reused
         created = [h for h in holes if h.area >= vc["min_room_area_m2"]
                    and not any(abs(h.area - b.area) < 0.01 * b.area and robust_intersection(h, b).area > 0.98 * h.area for b in base_holes)]
         if not created:

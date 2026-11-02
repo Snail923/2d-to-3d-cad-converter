@@ -43,7 +43,8 @@ class PipelineConfig:
         rt = self.data["runtime"]
         rt.setdefault("include_paperspace", False)
         rt.setdefault("forced_units", None)  # e.g. "mm" to override unit inference
-        rt.setdefault("disabled_detectors", [])  # detectors to skip (e.g. after a crash in the browser)
+        rt.setdefault("disabled_detectors", [])
+        rt.setdefault("safe_mode", False)  # skip optional, geometry-heavy steps (missing-room hypotheses)  # detectors to skip (e.g. after a crash in the browser)
         rt.setdefault("export_statuses", self.data["phase2"].get("export_statuses",
                                                                  ["ACCEPTED", "NEEDS_REVIEW"]))
 

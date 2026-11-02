@@ -254,6 +254,7 @@ class ExtractionPipeline:
         for w in walls:
             w.openings = [oid for oid in w.openings if any(o.id == oid for o in openings)]
         rd = RoomDetector(cfg, st.ctx.ids)
+        self._report("Step 7/10: room detection")
         rooms, solid, rlog = rd.detect(live, st.columns, openings, st.ctx.labels, tol)
         mrooms = manual_rooms(st.corrections)
         if mrooms:
@@ -269,7 +270,13 @@ class ExtractionPipeline:
         apply_status_overrides(rooms, st.corrections)
         live_rooms = [r for r in rooms if r.status != Status.REJECTED]
         G_rooms = relate_rooms(live_rooms, live, openings, tol)
-        hyps, hrooms, hlog = recover_missing_rooms(walls, st.columns, live_rooms, st.ctx.labels, tol, cfg, st.ctx.ids, rd)
+        if cfg["runtime"].get("safe_mode"):
+            hyps, hrooms, hlog = [], [], {"skipped": "safe mode"}
+            st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                      "message": "Safe mode: missing-room hypotheses were not computed"})
+        else:
+            self._report("Step 7/10: missing-room recovery")
+            hyps, hrooms, hlog = recover_missing_rooms(walls, st.columns, live_rooms, st.ctx.labels, tol, cfg, st.ctx.ids, rd)
         G_axis = build_axis_graph(live, tol)
         max_t = max([w.thickness or 0.0 for w in live] + [tol.snap * 4])  # shorter dangling pieces are junction overshoots
         b = Building()

@@ -58,16 +58,15 @@ def build_wall_graph(walls, tol) -> nx.Graph:
     if not idx:
         return G
     tree = STRtree([polys[i] for i in idx])
+    d = tol.snap * 1.5
+    from shapely.ops import nearest_points
     for a_pos, i in enumerate(idx):
-        pa = polys[i].buffer(tol.snap * 1.5)
-        for j_pos in tree.query(pa):
+        for j_pos in tree.query(bbox_pad(polys[i], d)):
             j = idx[int(j_pos)]
-            if j <= i:
+            if j <= i or polys[i].distance(polys[j]) > d:
                 continue
-            if pa.intersects(polys[j]):
-                inter = robust_intersection(pa, polys[j])
-                c = inter.centroid
-                G.add_edge(walls[i].id, walls[j].id, point=(c.x, c.y))
+            a, b = nearest_points(polys[i], polys[j])
+            G.add_edge(walls[i].id, walls[j].id, point=((a.x + b.x) / 2, (a.y + b.y) / 2))
     return G
 
 

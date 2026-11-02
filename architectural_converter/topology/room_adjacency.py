@@ -4,7 +4,7 @@ from __future__ import annotations
 import networkx as nx
 from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import rect_polygon, robust_intersection
+from ..geometry.geometric_utils import rect_polygon, robust_intersection, sample_points, bbox_pad
 
 
 def relate_rooms(rooms, walls, openings, tol) -> nx.Graph:
@@ -13,15 +13,19 @@ def relate_rooms(rooms, walls, openings, tol) -> nx.Graph:
         G.add_node(r.id, name=r.name, area=r.area)
     if not rooms:
         return G
+    import shapely
     tree = STRtree([r.polygon for r in rooms])
+    step = 0.1
+    samples = [shapely.points(sample_points(r.polygon.exterior, step)) for r in rooms]
+    d = tol.snap * 4
     for w in walls:
         p = w.polygon(max(tol.snap * 2, 0.01))
         if p is None:
             continue
         touch = []
-        for k in tree.query(p.buffer(tol.snap * 4)):
+        for k in tree.query(bbox_pad(p, d)):
             r = rooms[int(k)]
-            shared = robust_intersection(r.polygon.exterior, p.buffer(tol.snap * 4)).length
+            shared = float((shapely.distance(samples[int(k)], p) <= d).sum()) * step
             if shared > max(0.1, tol.snap * 10):
                 touch.append(r)
                 r.bounding_walls.add(w.id)

@@ -7,6 +7,7 @@ from typing import Iterable, Sequence
 import numpy as np
 from shapely.geometry import LineString, MultiPolygon, Polygon, GeometryCollection
 from shapely.geometry.base import BaseGeometry
+from shapely.strtree import STRtree
 
 EPS = 1e-12
 
@@ -262,3 +263,32 @@ def bbox_pad(geom, pad: float):
     from shapely.geometry import box
     minx, miny, maxx, maxy = geom.bounds
     return box(minx - pad, miny - pad, maxx + pad, maxy + pad)
+
+
+# ---------------------------------------------------------------------------- buffer-free measures
+# Distances never raise GEOS TopologyExceptions (buffers of large merged geometry can, and in
+# Pyodide such an exception aborts the interpreter). These helpers measure "how much of this
+# boundary lies along those polygons" by sampling instead of buffer + intersection.
+def sample_points(line, step: float = 0.1) -> np.ndarray:
+    """Points every ``step`` metres along a LineString / LinearRing (at least the two ends)."""
+    L = line.length
+    if L <= 0:
+        c = line.coords[0]
+        return np.array([c[:2]])
+    n = max(2, int(math.ceil(L / step)) + 1)
+    import shapely
+    pts = shapely.line_interpolate_point(line, np.linspace(0.0, L, n))
+    return shapely.get_coordinates(pts)
+
+
+def near_mask(points: np.ndarray, polys, dist: float, tree=None) -> np.ndarray:
+    """Boolean mask: which sample points lie within ``dist`` of any of ``polys``."""
+    import shapely
+    mask = np.zeros(len(points), dtype=bool)
+    if len(points) == 0 or not polys:
+        return mask
+    tree = tree if tree is not None else STRtree(polys)
+    geoms = shapely.points(points)
+    idx = tree.query_nearest(geoms, max_distance=dist, all_matches=False)
+    mask[np.unique(idx[0])] = True
+    return mask

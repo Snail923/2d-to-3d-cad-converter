@@ -1,7 +1,7 @@
 """Wall classification: exterior / interior / partition (+ openings and columns)."""
 from __future__ import annotations
 
-from ..geometry.geometric_utils import robust_intersection
+from ..geometry.geometric_utils import bbox_pad, polygons_of, sample_points
 
 from ..models.base_entity import Status
 from .architectural_rules import building_footprint, partition_threshold
@@ -9,17 +9,28 @@ from .architectural_rules import building_footprint, partition_threshold
 
 def classify_walls(walls, solid, tol, cfg):
     cc = cfg["classification"]
+    import numpy as np
+    import shapely
+    from shapely.strtree import STRtree
     fp = building_footprint(solid)
-    ring = fp.boundary if fp is not None else None
+    step = 0.1
+    ring_pts = None
+    if fp is not None:
+        rings = [g.exterior for g in polygons_of(fp)]
+        arr = np.vstack([sample_points(r, step) for r in rings]) if rings else np.zeros((0, 2))
+        ring_pts = shapely.points(arr) if len(arr) else None
+    ptree = STRtree(ring_pts) if ring_pts is not None else None
+    d = tol.snap * 3 + max(tol.snap, 1e-4) * 2
     for w in walls:
         if w.status == Status.REJECTED:
             continue
         p = w.polygon(max(tol.snap * 2, 0.01))
-        if p is None or ring is None:
+        if p is None or ptree is None:
             w.classification = "interior_wall"
             continue
         L = max(w.length, 1e-9)
-        ext = robust_intersection(p.buffer(tol.snap * 3), ring).length
+        cand = ptree.query(bbox_pad(p, d))
+        ext = float((shapely.distance(ring_pts[cand], p) <= d).sum()) * step if len(cand) else 0.0
         w.classification = "exterior_wall" if ext >= cc["exterior_face_fraction"] * L else "interior_wall"
     limit = partition_threshold([w for w in walls if w.status != Status.REJECTED], cfg)
     for w in walls:
