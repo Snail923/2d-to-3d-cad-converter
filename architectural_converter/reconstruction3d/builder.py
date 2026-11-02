@@ -16,7 +16,7 @@ from .mesh_utils import box, extrude
 COLORS = {"exterior_wall": [0.80, 0.78, 0.74, 1.0], "interior_wall": [0.92, 0.90, 0.86, 1.0],
           "partition_wall": [0.95, 0.95, 0.93, 1.0], "wall": [0.88, 0.86, 0.82, 1.0],
           "column": [0.62, 0.60, 0.58, 1.0], "floor": [0.76, 0.66, 0.52, 1.0],
-          "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
+          "stair": [0.70, 0.55, 0.42, 1.0], "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
 
 
 class Model3D:
@@ -70,9 +70,18 @@ def build_3d(model: dict, cfg) -> Model3D:
     ops = {}
     for o in view["openings"]:
         ops.setdefault(o["host_wall"], []).append(o)
+    # multi-storey placement: each floor plan is moved onto the reference floor and lifted to its level
+    levels = {lv["id"]: lv for lv in model.get("building", {}).get("levels", []) if lv.get("id")}
+    stacked = bool(model.get("building", {}).get("stacked"))
+    out.metadata["levels"] = [{"id": lv["id"], "name": lv["name"], "z": lv["z"], "height": lv["height"]}
+                              for lv in levels.values() if lv.get("kind") == "floor_plan"] if stacked else []
+
+    def level_height(e):
+        lv = levels.get(e.get("level")) if stacked else None
+        return lv.get("height") if lv else None
     for w in view["walls"]:
         g = w["geometry"]
-        H = w.get("height") or out.default("wall_height_m", p2["wall_height_m"], w["id"])
+        H = w.get("height") or level_height(w) or out.default("wall_height_m", p2["wall_height_m"], w["id"])
         t = w.get("thickness") or out.default("unknown_wall_thickness_m", p2["unknown_wall_thickness_m"], w["id"])
         color = COLORS.get(w.get("classification") or "wall", COLORS["wall"])
         if w["status"] == "NEEDS_REVIEW":
@@ -125,19 +134,48 @@ def build_3d(model: dict, cfg) -> Model3D:
                 V, F = extrude(poly["exterior"], 0.0, H)
                 out.add(w["id"], "wall", w.get("classification"), V, F, color)
     for col in view["columns"]:
-        H = col.get("height") or out.default("column_height_m", p2["column_height_m"], col["id"])
+        H = col.get("height") or level_height(col) or out.default("column_height_m", p2["column_height_m"], col["id"])
         if col.get("polygon"):
             V, F = extrude(col["polygon"]["exterior"], 0.0, H)
             out.add(col["id"], "column", col.get("classification"), V, F, COLORS["column"])
+    for sf in view.get("stairs", []):
+        _stair_mesh(out, sf)
     slab = p2["slab_thickness_m"]
     for r in view["rooms"]:
         if r.get("polygon"):
             V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
             out.add(r["id"], "floor", r.get("classification"), V, F, COLORS["floor"])
+    if stacked:
+        level_of = {e["id"]: e.get("level") for k in ("walls", "openings", "rooms", "columns", "stairs")
+                    for e in view.get(k, [])}
+        for m in out.meshes:
+            lv = levels.get(level_of.get(m["id"]))
+            if lv is None:
+                continue
+            tx, ty = lv.get("translation") or (0.0, 0.0)
+            m["vertices"] = m["vertices"] + np.array([tx, ty, lv.get("z") or 0.0])
     allv = np.vstack([m["vertices"] for m in out.meshes]) if out.meshes else np.zeros((1, 3))
     out.metadata["bounds"] = [allv.min(axis=0).round(3).tolist(), allv.max(axis=0).round(3).tolist()]
-    out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor")}
+    out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor", "stair")}
     return out
+
+
+def _stair_mesh(out, sf):
+    """Solid stepped block: step k fills the strip between tread lines k-1 and k at (k+1) risers."""
+    o = np.array(sf["origin"], float)
+    u = np.array(sf["u"], float)
+    r = np.array(sf["run"], float)
+    w0, w1 = sf["tread_span"]
+    rise = sf.get("rise") or 0.175
+    offs = sf["tread_offsets"]
+    prev = -sf["going"]
+    parts = []
+    for k, y in enumerate(offs):
+        ring = [tuple(o + u * x + r * yy) for x, yy in ((w0, prev), (w1, prev), (w1, y), (w0, y))]
+        parts.append(extrude(ring, 0.0, (k + 1) * rise))
+        prev = y
+    V, F = _merge(parts)
+    out.add(sf["id"], "stair", "stair", V, F, COLORS["stair"])
 
 
 def _merge(parts):

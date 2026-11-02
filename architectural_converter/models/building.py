@@ -35,6 +35,8 @@ class Building:
     footprint: Any = None
     graphs: dict[str, Any] = field(default_factory=dict)
     relationships: list[dict[str, Any]] = field(default_factory=list)
+    levels: list = field(default_factory=list)          # topology.level_analysis.Level
+    stairs: dict = field(default_factory=dict)
 
     def all_entities(self):
         yield from self.walls.values()

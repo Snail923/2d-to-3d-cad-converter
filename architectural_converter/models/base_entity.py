@@ -61,6 +61,7 @@ class ArchitecturalEntity:
     notes: list[str] = field(default_factory=list)
     status_reason: str | None = None
     manual_status: Status | None = None
+    level: str | None = None
 
     def add_evidence(self, key: str, value: float) -> None:
         value = float(max(0.0, min(1.0, value)))
@@ -114,4 +115,5 @@ class ArchitecturalEntity:
             "source_entities": sorted(self.source_entities),
             "evidence": {k: round(float(v), 3) for k, v in sorted(self.evidence.items())},
             "notes": list(self.notes),
+            "level": self.level,
         }

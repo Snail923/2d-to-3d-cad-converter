@@ -9,7 +9,10 @@ All coordinates are **metres** in the model frame. `source.transform` maps model
   "source": { "file": "...", "dxf_units": "mm", "unit_confidence": 1.0, "insunits_header": 4,
               "transform": { "scale_to_m": 0.001, "offset_drawing_units": [x, y] }, "metadata": {...}, "summary": {...} },
   "export_statuses": ["ACCEPTED", "NEEDS_REVIEW"],
-  "building": { "footprint": {...}, "levels": [{ "id": "L0", "elevation": 0.0, "height": null }] },
+  "building": { "footprint": {...}, "stacked": true,
+                "levels": [{ "id": "level_02", "name": "Ground floor", "rank": 0, "kind": "floor_plan", "walls": 24,
+                             "elevation": 708.75, "z": 3.35, "height": 3.35, "translation": [0.0, 0.0],
+                             "bbox": [...], "confidence": 0.9, "alignment": {...}, "sources": [...] }] },
   "walls": [{
       "id": "wall_0012", "type": "wall", "classification": "exterior_wall|interior_wall|partition_wall",
       "status": "ACCEPTED|NEEDS_REVIEW|REJECTED", "status_reason": null, "confidence": 0.93,
@@ -38,6 +41,9 @@ All coordinates are **metres** in the model frame. `source.transform` maps model
               "bounding_walls": [...], "openings": [...], "adjacent_rooms": [...], "connected_rooms": [...],
               "boundary_support": { "accepted_walls": 0.92, "review_walls": 0.0, "openings": 0.08, "inscribed_width": 3.1 } }],
   "columns": [{ "id": "column_0001", "shape": "rectangular", "size": [0.5, 0.5], "center": [x, y], "polygon": {...}, "height": null }],
+  "stairs": [{ "id": "stair_0001", "level": "level_02", "polygon": {...}, "origin": [x, y], "u": [1, 0], "run": [0, 1],
+               "width": 1.25, "going": 0.3, "treads": 12, "risers": 13, "tread_offsets": [0.0, 0.3, ...],
+               "tread_span": [0.0, 1.25], "direction_known": true, "rise": 0.175, "rise_source": "..." }],
   "hypotheses": { "walls": [ /* proposed missing walls (NEEDS_REVIEW, confidence <= 0.5) */ ], "rooms": [ /* rooms they would enclose */ ] },
   "relationships": [ { "type": "hosts|bounds|connects|adjacent|opening_of", "from": "...", "to": "..." } ],
   "validation": { "summary": {...}, "issues": [{ "id", "category", "code", "severity", "entity_id", "source_entities",
@@ -52,7 +58,10 @@ All coordinates are **metres** in the model frame. `source.transform` maps model
 (`reconstruction3d`) builds:
 * straight walls as boxes along the axis, with voids for openings (doors 0 → door height; windows sill → head;
   unidentified openings 0 → opening height);
-* arc and polygon walls as extrusions; columns as extrusions; rooms as floor slabs.
+* arc and polygon walls as extrusions; columns as extrusions; rooms as floor slabs; stairs as stepped solids.
+  Every element has a `level` (null for single-level drawings). With `building.stacked`, Phase 2 keeps only
+  `floor_plan` levels, moves each element by its level's `translation` and lifts it by `z`. Walls without their own
+  height take the level's storey height.
 
 Every default it uses (`config/phase2.json`) is listed in `metadata.defaults_used`, with the ids of the elements it
 was applied to.

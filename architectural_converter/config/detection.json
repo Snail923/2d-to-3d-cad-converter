@@ -154,6 +154,14 @@
       "size_plausibility": 1.0,
       "opening_access": 0.6,
       "manual": 10.0
+    },
+    "stair": {
+      "regularity": 1.2,
+      "tread_count": 0.6,
+      "layer_match": 1.5,
+      "stair_text": 1.2,
+      "stringers": 1.0,
+      "manual": 10.0
     }
   },
   "gates": {
@@ -171,6 +179,38 @@
       "min": 0.4,
       "penalty": 0.75,
       "applies_if": "thickness_plausibility"
+    },
+    "stair": {
+      "applies_if": "regularity",
+      "any_of": [
+        "stair_text",
+        "stringers"
+      ],
+      "min": 0.5,
+      "layer_min": 0.5,
+      "penalty": 0.6
     }
+  },
+  "stair": {
+    "_doc": "A flight = >= min_treads parallel tread lines of similar length, regularly spaced.",
+    "tread_length_m": [
+      0.6,
+      3.0
+    ],
+    "going_m": [
+      0.2,
+      0.42
+    ],
+    "min_treads": 4,
+    "max_gap_deviation": 0.18,
+    "min_overlap": 0.75,
+    "max_length_deviation": 0.2,
+    "angle_tol_deg": 2.0,
+    "text_patterns": [
+      "^(UP|DN|DOWN|MONTEE|DESC|HOCH|RUNTER|SUBE|BAJA)\\b"
+    ],
+    "full_flight_max_rise_m": 0.21,
+    "default_rise_m": 0.175,
+    "wall_veto_overlap": 0.8
   }
 }

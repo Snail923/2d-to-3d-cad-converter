@@ -11,6 +11,8 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 | | |
 |---|---|
 | Phase 1 | ingestion → preprocessing → semantic context → 5 wall detectors + doors/windows/columns → evidence resolver → reconstruction → topology/rooms → classification → validation → export (JSON + SQLite) |
+| Multi-storey | permit sets with all floors side by side: views are split, floor levels read from "F.F.L" annotations and titles, elevations / sections / duplicate (structural, sanitary) plans excluded, floors aligned and stacked at their real heights |
+| Stairs & rules | straight stair flights (treads are never read as walls; stepped 3D); plausibility rules: windows must sit in a wall, window-like lines in interior partitions become sliding / closet doors to review, rooms without access are flagged |
 | Phase 2 | reference 3D reconstruction (Shapely + Trimesh) from the exported model only → GLB |
 | Review UI | 2D overlay with layer toggles, evidence and source-entity inspection, accept/reject, add wall, connect endpoints, draw room, re-run, 3D viewer, exports |
 
@@ -21,7 +23,7 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 3. In **2D review**, click any element to see its confidence, evidence, reconstruction steps and source DXF entities
    (they are highlighted in pink). Use **Accept / Reject**, **Add wall**, **Connect endpoints** or **Draw room**, then
    **Re-run with corrections**.
-4. **3D model** shows the Phase 2 reconstruction. **Validation** lists every problem with its location, source
+4. **3D model** shows the Phase 2 reconstruction (for stacked buildings, **floors up to** shows the building up to one floor). **Validation** lists every problem with its location, source
    entities and a suggested correction. **Export** downloads the model (`.json`), the database (`.sqlite`), the 3D model
    (`.glb`) or an HTML report.
 

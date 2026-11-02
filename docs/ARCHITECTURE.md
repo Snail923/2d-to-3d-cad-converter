@@ -114,10 +114,33 @@ the pipeline.
   kept only if it encloses a new plausible room, and gains confidence when it captures an orphan label. It is output
   as a hypothesis wall and room (≤ 0.5 confidence, NEEDS_REVIEW) and is never added silently.
 
+* **Floor levels** (`topology/level_analysis.py`, `config/levels.json`): permit sets usually draw every floor side
+  by side on one sheet. Accepted walls are clustered into views (separated by ≥ `view_gap_m`). Each view reads its
+  own texts: finished-floor levels ("708.75 F.F.L", "FFL +3.35", "±0.00"), level names ("GROUND FLOOR PLAN",
+  "BASEMENT 2") and room tags ("Lobby GF", "Entrance F1-2"). Views titled elevation / section, or carrying several
+  different levels, are `elevation_or_section`. A second view of the same level (structural, sanitary, furniture
+  plan) is a `duplicate`. Elements of both are vetoed with a reason. Stacking happens only when at least two
+  identified floor plans exist. The plan with the most walls is the reference. Every other floor is moved onto it by
+  a vote over the displacements between linework end points (falls back to bounding boxes at lower confidence).
+  `z` comes from the FFL values and the storey height from the next FFL up. The top floor uses the typical
+  measured height.
+
+## Stair flights (`detectors/stair_detector.py`)
+A flight is ≥ `min_treads` parallel lines of similar length (0.6–3 m) at a regular spacing (going 0.20–0.42 m).
+Evidence: regularity, tread count, stair layer, an UP / DN marker or "stair" label, and side lines (stringers /
+walls). Geometry alone is gated to NEEDS_REVIEW. Wall candidates built from a live flight's treads are vetoed (two
+treads 0.3 m apart look like a 0.3 m wall). The rise is the storey height / risers when that gives ≤ 0.21 m.
+Otherwise the flight is treated as one flight of a multi-flight stair and gets the default rise. Phase 2 builds
+stepped solids.
+
 ## Stages 8–9: classification and validation
 * Walls are exterior when one face runs along the building footprint. Partitions are interior walls at or below a
   thickness limit derived from the drawing's own thickness classes. Openings are exterior or interior. Columns are
   engaged or free-standing. Rooms are typed from labels first, then geometry (corridor, service room).
+* Plausibility rules (`classification/plausibility.py`): a window with no host wall is rejected (furniture or a
+  shelf near a wall). A window in an interior or partition wall with no window symbol, name or layer is re-typed
+  as a `door` / `sliding_or_closet` and sent to review (wardrobe fronts drawn with thin parallel lines). A room
+  with no door or opening gets a `no_access` validation warning.
 * Validation produces issues with entity id, source DXF entities (handle, layer, type, block), location, problem,
   suggested correction and confidence.
 

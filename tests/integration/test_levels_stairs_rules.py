@@ -1,0 +1,75 @@
+"""Multi-storey stacking, stair flights and plausibility rules."""
+import os
+import tempfile
+
+from architectural_converter.benchmark.dxf_writer import Style, render_plan
+from architectural_converter.benchmark.permit_set import build_permit_set
+from architectural_converter.benchmark.plan_spec import PlanSpec
+from architectural_converter.models.base_entity import Status
+from architectural_converter.pipeline.extraction_pipeline import ExtractionPipeline
+from architectural_converter.pipeline.pipeline_config import PipelineConfig
+from architectural_converter.reconstruction3d import build_3d
+
+
+def _run(doc, name):
+    p = os.path.join(tempfile.mkdtemp(prefix="acv_"), name)
+    doc.saveas(p)
+    return ExtractionPipeline(PipelineConfig()).process(p)
+
+
+def test_permit_set_levels_and_stairs():
+    doc, ref = build_permit_set()
+    st = _run(doc, "permit.dxf")
+    b = st.building
+    plans = [lv for lv in b.levels if lv.kind == "floor_plan"]
+    assert [lv.elevation for lv in plans] == [705.40, 708.75, 712.10, 715.45]
+    assert all(abs(lv.height - 3.35) < 1e-6 for lv in plans)
+    assert {lv.kind for lv in b.levels} >= {"duplicate", "elevation_or_section"}
+    ref_off = {r["elevation"]: r["sheet_offset"] for r in ref["levels"]}
+    base = next(lv for lv in plans if lv.translation == [0.0, 0.0] or tuple(lv.translation) == (0.0, 0.0))
+    for lv in plans:      # aligned onto the reference sheet
+        exp = ref_off[base.elevation][0] - ref_off[lv.elevation][0]
+        assert abs(lv.translation[0] - exp) < 0.05 and abs(lv.translation[1]) < 0.05
+    # one accepted flight per floor plan; their treads never become walls
+    stairs = [s for s in b.stairs.values() if s.status == Status.ACCEPTED]
+    assert sorted(s.level for s in stairs) == sorted(lv.id for lv in plans)
+    assert all(s.treads == 12 and abs(s.going - 0.3) < 0.01 for s in stairs)
+    tread_ids = set().union(*(s.source_entities for s in stairs))
+    assert not [w for w in b.walls.values() if w.status != Status.REJECTED and w.source_entities
+                and w.source_entities <= tread_ids]
+    # elements of the elevation / duplicate sheets are not modelled
+    for w in b.walls.values():
+        lv = next((x for x in b.levels if x.id == w.level), None)
+        if lv is not None and lv.kind != "floor_plan":
+            assert w.status == Status.REJECTED
+    m3 = build_3d(st.model, PipelineConfig())
+    lo, hi = m3.metadata["bounds"]
+    assert hi[0] - lo[0] < 30 and hi[2] > 10.05 + 2.5      # stacked, not side by side
+    assert m3.metadata["counts"]["stair"] == 4
+
+
+def test_no_stairs_in_plain_plans():
+    from architectural_converter.benchmark.plans import PLANS
+    spec, style = PLANS[0]() if callable(PLANS[0]) else PLANS[0]
+    doc, _ = render_plan(spec, style)
+    st = _run(doc, "p.dxf")
+    assert not st.building.stairs and not st.building.levels
+
+
+def test_window_in_closet_partition_becomes_sliding_door():
+    s = PlanSpec("closet", "bedroom with a wardrobe front drawn like glazing")
+    s.chain([(0, 0), (6, 0), (6, 4), (0, 4)], 0.3, closed=True)
+    s.wall((0, 1.6), (6, 1.6), 0.12)
+    s.wall((4.6, 1.6), (4.6, 4), 0.12)
+    s.opening_at((3, 1.6), 0.9, "door")
+    s.opening_at((4.6, 2.8), 1.6, "window")
+    s.opening_at((2, 4), 1.5, "window")
+    s.opening_at((6, 0.8), 0.9, "door")
+    s.label("BEDROOM", (2, 2.8))
+    doc, _ = render_plan(s, Style(layers="poor", window_repr="loose"))
+    st = _run(doc, "closet.dxf")
+    ops = [o for o in st.building.openings.values() if o.status != Status.REJECTED]
+    sliding = [o for o in ops if o.subtype == "sliding_or_closet"]
+    assert len(sliding) == 1 and sliding[0].type == "door" and sliding[0].status == Status.NEEDS_REVIEW
+    windows = [o for o in ops if o.type == "window"]
+    assert len(windows) == 1 and windows[0].classification == "exterior_window"

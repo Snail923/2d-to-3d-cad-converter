@@ -1,0 +1,6 @@
+{
+  "_doc": "Multi-storey detection: views are spatial clusters of walls; levels are read from FFL annotations and level names.",
+  "view_gap_m": 4.0,
+  "min_walls_per_view": 4,
+  "max_ffl_spread_in_plan_m": 2.0
+}

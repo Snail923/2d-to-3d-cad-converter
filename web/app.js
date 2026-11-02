@@ -206,6 +206,7 @@ function load(data, keepView = false) {
   for (const o of m.openings) S.byId.set(o.id, { kind: "opening", obj: o });
   for (const r of m.rooms) S.byId.set(r.id, { kind: "room", obj: r });
   for (const c of m.columns) S.byId.set(c.id, { kind: "column", obj: c });
+  for (const s of m.stairs || []) S.byId.set(s.id, { kind: "stair", obj: s });
   for (const h of m.hypotheses.walls) S.byId.set(h.id, { kind: "hypothesis", obj: h });
   for (const r of m.hypotheses.rooms) S.byId.set(r.id, { kind: "room_hypothesis", obj: r });
   $("#empty2d").style.display = "none";
@@ -215,6 +216,10 @@ function load(data, keepView = false) {
   renderInfo();
   renderCorr();
   viewer3d.setData(data.mesh, S.model);
+  const b = S.model.building || {}, fl = b.stacked ? b.levels.filter((l) => l.kind === "floor_plan").sort((x, y) => x.z - y.z) : [];
+  $("#levels3dBox").style.display = fl.length ? "" : "none";
+  $("#levels3d").innerHTML = fl.map((l, i) => `<option value="${i}" ${i === fl.length - 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+  viewer3d.setVisible("maxLevel", fl.length ? fl.length - 1 : Infinity);
   const d = data.mesh.metadata.defaults_used || {};
   $("#defaults3d").textContent = Object.keys(d).length ? "Defaults applied (not in drawing): " +
     Object.entries(d).map(([k, v]) => `${k}=${v.value}`).join(", ") : "";
@@ -270,6 +275,17 @@ function draw2d(keepView) {
   }
   const gC = el("g", { class: "columns" }, world);
   for (const c of m.columns) if (c.polygon) el("path", { class: `el column st-${c.status}`, d: polyD(c.polygon), "data-id": c.id }, gC);
+  const gS = el("g", { class: "stairs" }, world);
+  for (const s of m.stairs || []) {
+    if (!s.polygon) continue;
+    el("path", { class: `el stair st-${s.status}`, d: polyD(s.polygon), "data-id": s.id }, gS);
+    const P = (x, y) => [s.origin[0] + s.u[0] * x + s.run[0] * y, s.origin[1] + s.u[1] * x + s.run[1] * y];
+    for (const y of s.tread_offsets) el("path", { class: "tread", d: pathD([P(s.tread_span[0], y), P(s.tread_span[1], y)]) }, gS);
+    if (s.direction_known) {
+      const xm = (s.tread_span[0] + s.tread_span[1]) / 2, y1 = s.tread_offsets[s.tread_offsets.length - 1];
+      el("path", { class: "walkline", d: pathD([P(xm, -s.going / 2), P(xm, y1)]) }, gS);
+    }
+  }
   const gO = el("g", { class: "openings" }, world);
   for (const o of m.openings) {
     const p = o.position;
@@ -473,7 +489,7 @@ const LAYERS = [
   ["rooms", "Rooms", "#ffe9a8"], ["roomlabels", "Room labels", "#8a6d00"], ["exterior", "Exterior walls", "#1d4f91"],
   ["interior", "Interior walls", "#2f7d32"], ["partition", "Partition walls", "#7cb342"], ["review", "Uncertain walls", "#f2a33a"],
   ["rejected", "Rejected candidates", "#d32f2f"], ["doors", "Doors", "#ef6c00"], ["windows", "Windows", "#0288d1"],
-  ["openings", "Unidentified openings", "#8e24aa"], ["columns", "Columns", "#6a1b9a"], ["hyps", "Missing-wall hypotheses", "#ff00aa"],
+  ["openings", "Unidentified openings", "#8e24aa"], ["columns", "Columns", "#6a1b9a"], ["stairs", "Stairs", "#a0522d"], ["hyps", "Missing-wall hypotheses", "#ff00aa"],
   ["issues", "Validation markers", "#ff9100"], ["axes", "Wall centre lines", "#555"],
 ];
 const hidden = new Set(["rejected", "dxftext"]);
@@ -490,7 +506,7 @@ function renderLayers() {
     windows: m.openings.filter((o) => o.type === "window" && o.status !== "REJECTED").length,
     openings: m.openings.filter((o) => o.type === "opening" && o.status !== "REJECTED").length,
     rooms: m.rooms.filter((r) => r.status !== "REJECTED").length, columns: m.columns.filter((c) => c.status !== "REJECTED").length,
-    hyps: m.hypotheses.walls.length, issues: m.validation.issues.filter((i) => i.severity !== "info").length,
+    stairs: (m.stairs || []).filter((x) => x.status !== "REJECTED").length, hyps: m.hypotheses.walls.length, issues: m.validation.issues.filter((i) => i.severity !== "info").length,
   };
   for (const [key, label, color] of LAYERS) {
     const l = document.createElement("label");
@@ -546,6 +562,10 @@ function renderDetails(kind, o) {
     if (rec.merged) props += `<tr><td>merged</td><td class="small">${rec.merged.map((m) => `${m.wall} (${esc(m.reason)})`).join("<br>")}</td></tr>`;
     if (rec.face_support) props += `<tr><td>face support</td><td class="small">left ${rec.face_support.left} · right ${rec.face_support.right}</td></tr>`;
     if (rec.hypothesis) props += `<tr><td>hypothesis</td><td class="small">${esc(rec.hypothesis.reason)} from ${esc(rec.hypothesis.from_wall)}</td></tr>`;
+  } else if (kind === "stair") {
+    props = `<tr><td>treads / risers</td><td>${o.treads} / ${o.risers}</td></tr><tr><td>going</td><td>${fmt(o.going, 3)} m</td></tr>
+      <tr><td>width</td><td>${fmt(o.width)} m</td></tr><tr><td>rise</td><td>${fmt(o.rise, 3)} m <span class="muted">(${esc(o.rise_source)})</span></td></tr>
+      <tr><td>walking direction</td><td>${o.direction_known ? "from UP marker" : "unknown"}</td></tr><tr><td>level</td><td>${esc(o.level || "—")}</td></tr>`;
   } else if (kind === "opening") {
     props = `<tr><td>type</td><td>${esc(o.type)} · ${esc(o.subtype)}</td></tr><tr><td>width</td><td>${fmt(o.width)} m</td></tr>
       <tr><td>height / sill</td><td>${fmt(o.height)} / ${fmt(o.sill_height)}</td></tr>
@@ -655,6 +675,7 @@ function renderInfo() {
       <tr><td>layers / blocks / inserts</td><td>${src.summary.layers} / ${src.summary.blocks} / ${src.summary.inserts}</td></tr></table>
     <h3>Result</h3><table class="grid"><tr><td>counts by status</td><td class="mono small">${esc(JSON.stringify(st.counts))}</td></tr>
       <tr><td>timings (s)</td><td class="mono small">${esc(JSON.stringify(st.timings_s))}</td></tr></table>
+    ${levelsTable(m.building)}
     <h3>Adaptive tolerances (metres)</h3><table class="grid">
       <tr><td>duplicate</td><td>${tol.duplicate.toExponential(2)}</td></tr><tr><td>endpoint snap</td><td>${tol.snap.toFixed(4)}</td></tr>
       <tr><td>intersection</td><td>${tol.intersection.toFixed(4)}</td></tr><tr><td>parallel angle</td><td>${tol.angle_deg.toFixed(2)}° (max ${tol.angle_max_deg.toFixed(1)}°)</td></tr>
@@ -666,6 +687,14 @@ function renderInfo() {
       ${Object.values(S.view.layers).filter((l) => Object.keys(l.entity_counts).length).map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.primary || "—")}</td><td class="num">${(+l.wall_evidence).toFixed(2)}</td><td class="mono small">${esc(JSON.stringify(l.entity_counts))}</td><td class="num">${(+l.parallel_share).toFixed(2)}</td></tr>`).join("")}</table>
     <h3>Block symbols</h3><div class="mono small">${esc(JSON.stringify(ctx.symbol_roles))}</div>
     <h3>Stage logs</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
+}
+
+function levelsTable(b) {
+  if (!b || !b.stacked) return `<h3>Floor levels</h3><p class="small muted">Single level (no set of floor plans with floor-level annotations was found).</p>`;
+  return `<h3>Floor levels (stacked in 3D)</h3><table class="grid"><tr><th>level</th><th>view</th><th>FFL</th><th>z</th><th>height</th><th>shift (m)</th><th>conf.</th></tr>
+    ${b.levels.map((l) => `<tr><td>${esc(l.name)} <span class="muted small">${esc(l.id)}</span></td><td>${esc(l.kind.replace(/_/g, " "))}</td>
+      <td class="num">${l.elevation ?? "—"}</td><td class="num">${l.kind === "floor_plan" ? fmt(l.z) : "—"}</td><td class="num">${l.kind === "floor_plan" ? fmt(l.height) : "—"}</td>
+      <td class="mono small">${l.kind === "floor_plan" ? (l.translation || []).map((v) => (+v).toFixed(2)).join(", ") : "not modelled"}</td><td class="num">${(+l.confidence).toFixed(2)}</td></tr>`).join("")}</table>`;
 }
 
 // ------------------------------------------------------------------ benchmark
@@ -717,4 +746,5 @@ function showTab(id) {
 for (const b of $$(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
 $("#show3dFloors").addEventListener("change", (e) => viewer3d.setVisible("floor", e.target.checked));
 $("#show3dReview").addEventListener("change", (e) => viewer3d.setVisible("review", e.target.checked));
+$("#levels3d").addEventListener("change", (e) => viewer3d.setVisible("maxLevel", +e.target.value));
 $("#show3dGlass").addEventListener("change", (e) => viewer3d.setVisible("window", e.target.checked));

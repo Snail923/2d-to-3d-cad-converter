@@ -11,7 +11,11 @@
 * DWG needs the ODA File Converter (CLI only). The browser accepts DXF.
 * Model space only by default (`runtime.include_paperspace` enables layouts, but viewport transforms are not applied).
 * XREFs are not resolved (bind them before export). Proxy, ACIS and 3D solid entities are kept as raw records only.
-* One storey per drawing. Multiple plans on one sheet are treated as one building.
+* Several floors on one sheet are stacked only when each floor plan carries a readable level (FFL value or a floor
+  name/tag). Plans without them stay side by side (single level). Floors are aligned by a translation only, so
+  rotated or differently scaled views are not aligned.
+* Elevations and sections are recognised by their title or by carrying several FFL values. An untitled elevation
+  with a single level marker may be read as a floor plan.
 
 **Detection**
 * Curved walls are detected from concentric ARC pairs (including polyline bulges). Spline- or ellipse-drawn curved
@@ -26,11 +30,16 @@
   wall-like pair. These candidates are typically NEEDS_REVIEW (see benchmark drawing 09).
 * Single-line walls get `thickness = null`. Phase 2 applies `unknown_wall_thickness_m`.
 
+* Stairs: straight flights only. Winders, spiral stairs and flights drawn as blocks without tread lines are not
+  detected. Landings are not modelled. Without an UP/DN marker the walking direction is unknown.
+* Plausibility rules use the wall classification. A wardrobe front in an exterior wall (rare) stays a window.
+  Thin furniture lines (shelves) can still pair into short thin "walls", which are usually low confidence.
+
 **Reconstruction / topology**
 * Gaps of opening size without a symbol become *unidentified openings* (flagged). Gaps wider than the configured
   maximum opening (2.8 m, or the symbol width) are not bridged; missing-room recovery proposes hypotheses instead.
 * Room polygons are net areas (inside wall faces). For single-line walls they extend to the centre lines.
-* Heights, sill heights and levels are not read from the plan (they rarely exist in 2D). DXF `thickness` (extrusion)
+* Heights and sill heights are not read from the plan (they rarely exist in 2D). DXF `thickness` (extrusion)
   attributes are preserved as raw attributes but not used.
 
 **Performance**

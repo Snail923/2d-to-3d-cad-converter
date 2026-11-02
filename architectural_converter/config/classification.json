@@ -6,21 +6,153 @@
   "corridor_min_aspect": 3.0,
   "corridor_max_width_m": 2.6,
   "room_keywords": {
-    "bedroom": ["bed", "bedroom", "chambre", "schlafzimmer", "dormitorio", "habitacion", "quarto", "master", "guest room"],
-    "bathroom": ["bath", "bathroom", "wc", "toilet", "shower", "sdb", "salle de bain", "bad", "bano", "aseo", "lavatory", "restroom", "ensuite"],
-    "kitchen": ["kitchen", "kitchenette", "cuisine", "kuche", "kueche", "cocina", "cozinha", "pantry"],
-    "living": ["living", "lounge", "salon", "sejour", "wohnzimmer", "sala", "family"],
-    "dining": ["dining", "salle a manger", "essen", "comedor"],
-    "corridor": ["corridor", "hall", "hallway", "couloir", "flur", "pasillo", "passage", "circulation", "lobby", "entrance", "entry", "foyer", "vestibule"],
-    "office": ["office", "bureau", "buro", "oficina", "workspace", "open office"],
-    "meeting": ["meeting", "conference", "board", "reunion"],
-    "storage": ["storage", "store", "stor", "closet", "cupboard", "rangement", "abstell", "lager", "deposito", "utility", "laundry", "janitor"],
-    "stair": ["stair", "stairs", "escalier", "treppe", "escalera"],
-    "elevator": ["lift", "elevator", "ascenseur", "aufzug"],
-    "technical": ["plant", "mech", "electrical", "riser", "shaft", "server", "technique"],
-    "retail": ["shop", "retail", "sales", "store front", "boutique"],
-    "guest_room": ["room", "suite", "guest"]
+    "bedroom": [
+      "bed",
+      "bedroom",
+      "chambre",
+      "schlafzimmer",
+      "dormitorio",
+      "habitacion",
+      "quarto",
+      "master",
+      "guest room"
+    ],
+    "bathroom": [
+      "bath",
+      "bathroom",
+      "wc",
+      "toilet",
+      "shower",
+      "sdb",
+      "salle de bain",
+      "bad",
+      "bano",
+      "aseo",
+      "lavatory",
+      "restroom",
+      "ensuite"
+    ],
+    "kitchen": [
+      "kitchen",
+      "kitchenette",
+      "cuisine",
+      "kuche",
+      "kueche",
+      "cocina",
+      "cozinha",
+      "pantry"
+    ],
+    "living": [
+      "living",
+      "lounge",
+      "salon",
+      "sejour",
+      "wohnzimmer",
+      "sala",
+      "family"
+    ],
+    "dining": [
+      "dining",
+      "salle a manger",
+      "essen",
+      "comedor"
+    ],
+    "corridor": [
+      "corridor",
+      "hall",
+      "hallway",
+      "couloir",
+      "flur",
+      "pasillo",
+      "passage",
+      "circulation",
+      "lobby",
+      "entrance",
+      "entry",
+      "foyer",
+      "vestibule"
+    ],
+    "office": [
+      "office",
+      "bureau",
+      "buro",
+      "oficina",
+      "workspace",
+      "open office"
+    ],
+    "meeting": [
+      "meeting",
+      "conference",
+      "board",
+      "reunion"
+    ],
+    "storage": [
+      "storage",
+      "store",
+      "stor",
+      "closet",
+      "cupboard",
+      "rangement",
+      "abstell",
+      "lager",
+      "deposito",
+      "utility",
+      "laundry",
+      "janitor"
+    ],
+    "stair": [
+      "stair",
+      "stairs",
+      "escalier",
+      "treppe",
+      "escalera"
+    ],
+    "elevator": [
+      "lift",
+      "elevator",
+      "ascenseur",
+      "aufzug"
+    ],
+    "technical": [
+      "plant",
+      "mech",
+      "electrical",
+      "riser",
+      "shaft",
+      "server",
+      "technique"
+    ],
+    "retail": [
+      "shop",
+      "retail",
+      "sales",
+      "store front",
+      "boutique"
+    ],
+    "guest_room": [
+      "room",
+      "suite",
+      "guest"
+    ]
   },
-  "area_text_patterns": ["([0-9]+(?:[.,][0-9]+)?)\\s*(?:m2|m²|sqm|sq\\.?\\s*m)"],
-  "area_match_tol": 0.12
+  "area_text_patterns": [
+    "([0-9]+(?:[.,][0-9]+)?)\\s*(?:m2|m\u00b2|sqm|sq\\.?\\s*m)"
+  ],
+  "area_match_tol": 0.12,
+  "plausibility": {
+    "_doc": "Context rules applied after wall classification (see classification/plausibility.py).",
+    "enabled": true,
+    "strong_window_evidence_min": 0.5,
+    "closet_max_area_m2": 3.0,
+    "closet_words": [
+      "closet",
+      "wardrobe",
+      "dressing",
+      "store",
+      "storage",
+      "wic",
+      "placard",
+      "armoire"
+    ]
+  }
 }

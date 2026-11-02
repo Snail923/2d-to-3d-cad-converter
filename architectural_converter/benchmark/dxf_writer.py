@@ -291,6 +291,8 @@ class _Writer:
 
     # ------------------------------------------------------------- blocks
     def block(self, name, builder):
+        if name not in self._blocks and name in self.doc.blocks:
+            self._blocks[name] = self.doc.blocks.get(name)      # shared document (multi-sheet sets)
         if name not in self._blocks:
             b = self.doc.blocks.new(name)
             builder(b)

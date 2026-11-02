@@ -22,7 +22,8 @@ export class Viewer3D {
     this.root.rotation.x = -Math.PI / 2;  // model z-up -> three y-up
     this.scene.add(this.root);
     this.objects = new Map();
-    this.visible = { floor: true, review: true, window: true };
+    this.visible = { floor: true, review: true, window: true, maxLevel: Infinity };
+    this.levelRank = new Map();
     this.ray = new THREE.Raycaster();
     this.renderer.domElement.addEventListener("click", (ev) => this.pick(ev));
     new ResizeObserver(() => this.resize()).observe(container);
@@ -41,6 +42,10 @@ export class Viewer3D {
     for (const o of this.objects.values()) { o.geometry.dispose(); o.material.dispose(); this.root.remove(o); }
     this.objects.clear();
     const statusOf = new Map(model.walls.map((w) => [w.id, w.status]));
+    const levelOf = new Map();
+    for (const k of ["walls", "openings", "rooms", "columns", "stairs"]) for (const e of model[k] || []) levelOf.set(e.id, e.level);
+    const lv = (model.building && model.building.stacked) ? model.building.levels.filter((l) => l.kind === "floor_plan") : [];
+    this.levelRank = new Map(lv.sort((a, b) => a.z - b.z).map((l, i) => [l.id, i]));
     for (const m of mesh.meshes) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(m.positions, 3));
@@ -50,7 +55,7 @@ export class Viewer3D {
       const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(r, gr, b), transparent: a < 1, opacity: a,
         roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide, flatShading: true, depthWrite: a >= 1 });
       const obj = new THREE.Mesh(g, mat);
-      obj.userData = { id: m.id, type: m.type, review: statusOf.get(m.id) === "NEEDS_REVIEW", base: mat.color.clone() };
+      obj.userData = { id: m.id, type: m.type, review: statusOf.get(m.id) === "NEEDS_REVIEW", level: levelOf.get(m.id), base: mat.color.clone() };
       this.root.add(obj);
       this.objects.set(m.id + ":" + m.type, obj);
     }
@@ -58,7 +63,7 @@ export class Viewer3D {
     const [lo, hi] = mesh.metadata.bounds || [[0, 0, 0], [10, 10, 3]];
     const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2;
     const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], 3);
-    this.controls.target.set(cx, 0, -cy);
+    this.controls.target.set(cx, Math.max(0, (hi[2] - lo[2]) * 0.3), -cy);
     this.camera.position.set(cx + size * 0.55, size * 0.85, -cy + size * 0.95);
     this.camera.near = size / 500; this.camera.far = size * 20;
     this.camera.updateProjectionMatrix();
@@ -71,7 +76,8 @@ export class Viewer3D {
     for (const o of this.objects.values()) {
       const u = o.userData;
       o.visible = !(u.type === "floor" && !this.visible.floor) && !(u.review && !this.visible.review) &&
-        !(u.type === "window" && !this.visible.window);
+        !(u.type === "window" && !this.visible.window) &&
+        !((this.levelRank.get(u.level) ?? -1) > this.visible.maxLevel);
     }
   }
 

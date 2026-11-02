@@ -68,6 +68,12 @@ def build(out: str, skip_benchmark: bool, wheels_from: str | None):
         shutil.copy(src.replace(".dxf", ".reference.json"), sdir)
         samples.append({"file": name + ".dxf", "reference": name + ".reference.json",
                         "title": f"{name.replace('_', ' ')} — {spec.description}"})
+    from architectural_converter.benchmark.permit_set import build_permit_set
+    pdoc, _ = build_permit_set()
+    pdoc.saveas(os.path.join(sdir, "14_permit_set_multistorey.dxf"))
+    samples.append({"file": "14_permit_set_multistorey.dxf", "reference": None,
+                    "title": "14 permit set multistorey — basement + 3 floors side by side with F.F.L levels, "
+                             "stairs, a duplicate structural plan and an elevation (stacked into one building)"})
     # benchmark
     bench = {}
     if not skip_benchmark:

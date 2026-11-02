@@ -8,7 +8,7 @@ from shapely.strtree import STRtree
 from ..models.base_entity import Status
 
 
-def validate_rooms(report, rooms, labels, tol, cfg):
+def validate_rooms(report, rooms, labels, tol, cfg, openings=None):
     vc = cfg["validation"]
     live = [r for r in rooms if r.status != Status.REJECTED]
     for r in rooms:
@@ -33,6 +33,13 @@ def validate_rooms(report, rooms, labels, tol, cfg):
             report.add("room", "weak_boundary_support", "warning", r, loc,
                        f"Room {r.id} boundary is weakly supported by accepted walls ({sup:.0%}).",
                        "Review uncertain walls around this room.", 0.6)
+        if openings is not None and r.area >= vc["min_room_area_m2"] and r.classification != "shaft_or_void":
+            access = [o for o in (openings.get(x) for x in r.openings) if o is not None
+                      and o.status != Status.REJECTED and o.type in ("door", "opening")]
+            if not access:
+                report.add("room", "no_access", "warning", r, loc,
+                           f"Room {r.id}{' (' + r.name + ')' if r.name else ''} has no door or opening.",
+                           "A door may have been read as a window or missed; add or re-type the opening.", 0.6)
         if len(r.label_texts) > 1:
             report.add("room", "multiple_labels", "warning", r, loc,
                        f"Room {r.id} contains several room labels: {', '.join(t.splitlines()[0] for t in r.label_texts)}.",

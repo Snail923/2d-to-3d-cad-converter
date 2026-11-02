@@ -79,6 +79,7 @@ class PipelineState:
     doors: list = field(default_factory=list)
     windows: list = field(default_factory=list)
     columns: list = field(default_factory=list)
+    stairs: list = field(default_factory=list)
     building: Building | None = None
     solid: Any = None
     report: ValidationReport | None = None
@@ -211,6 +212,22 @@ class ExtractionPipeline:
         st.walls, st.doors, st.windows, st.columns = walls, doors, windows, columns
         st.logs["resolve"] = dict(st.ctx.stats.get("resolver", {}), manual_overrides=n,
                                   manual_walls=len(corr.get("added_walls", [])))
+        # stair flights: their tread lines must not survive as wall candidates
+        from ..detectors.stair_detector import detect_stairs, veto_tread_walls
+        if "stair_detector" in self.cfg["runtime"].get("disabled_detectors", []):
+            st.stairs, slog = [], {"skipped": "disabled"}
+        else:
+            self._report("Step 5/10: stair flights")
+            try:
+                ids = st.ctx.ids
+                st.stairs, slog = detect_stairs(st.ctx, self.cfg, ids, st.ctx.labels)
+                apply_status_overrides(st.stairs, corr)
+                slog["walls_vetoed"] = veto_tread_walls(st.stairs, walls, self.cfg)
+            except Exception as e:  # noqa: BLE001  (an optional detector must never stop the pipeline)
+                st.stairs, slog = [], {"error": str(e)}
+                st.drawing.issues.append({"stage": "resolve", "severity": "warning",
+                                          "message": f"stair detector failed: {e}"})
+        st.logs["stairs"] = slog
 
     def _stage_reconstruct(self, st):
         walls, generic, log = reconstruct(st.walls, st.doors, st.windows, st.ctx, self.cfg)
@@ -284,16 +301,62 @@ class ExtractionPipeline:
         b.openings = {o.id: o for o in st.doors + st.windows + st._generic}
         b.rooms = {r.id: r for r in rooms}
         b.columns = {c.id: c for c in st.columns}
+        b.stairs = {s_.id: s_ for s_ in st.stairs}
         b.hypotheses = {h.id: h for h in hyps}
         b.room_hypotheses = {r.id: r for r in hrooms}
         b.labels = st.ctx.labels
         b.graphs = {"walls": G_walls, "rooms": G_rooms, "axes": G_axis}
+        self._report("Step 7/10: floor levels")
+        self._assign_levels(st, b, tol)
+        from ..detectors.stair_detector import assign_rise
+        assign_rise(b.stairs.values(), {lv.id: lv for lv in b.levels}, self.cfg)
         st.building = b
         st.solid = solid
         st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "wall_graph_components": _ncomp(G_walls),
                                "axis_graph": {"nodes": G_axis.number_of_nodes(), "edges": G_axis.number_of_edges(),
                                               "dangling_nodes": sum(1 for n in G_axis.nodes if G_axis.degree(n) == 1
                                                                    and next(iter(G_axis.edges(n, data=True)))[2]["length"] > max_t)}}
+
+    def _assign_levels(self, st, b, tol):
+        from shapely.geometry import Point, box as _box
+        from ..topology.level_analysis import analyze_levels
+        levels, wall_level, llog = analyze_levels(list(b.walls.values()), st.ctx.labels, st.ctx.strokes, tol, self.cfg)
+        st.logs["levels"] = llog
+        if not llog.get("stacked"):
+            b.levels = []
+            return
+        b.levels = levels
+        lv_by_id = {lv.id: lv for lv in levels}
+        boxes = [(lv, _box(*lv.bbox).buffer(0.5)) for lv in levels]
+
+        def locate(geom):
+            if geom is None:
+                return None
+            c = geom.representative_point() if hasattr(geom, "representative_point") else Point(geom)
+            for lv, bx in boxes:
+                if bx.contains(c):
+                    return lv.id
+            return None
+        for w in b.walls.values():
+            w.level = wall_level.get(w.id) or locate(w.polygon(0.05) or w.axis)
+        for o in b.openings.values():
+            host = b.walls.get(o.host_wall) if o.host_wall else None
+            o.level = host.level if host is not None else locate(Point(o.center))
+        for coll in (b.rooms, b.room_hypotheses):
+            for r in coll.values():
+                r.level = locate(r.polygon)
+        for c in b.columns.values():
+            c.level = locate(c.polygon)
+        for h in b.hypotheses.values():
+            h.level = locate(h.axis)
+        for s_ in b.stairs.values():
+            s_.level = locate(s_.polygon)
+        reasons = {"elevation_or_section": "drawn in an elevation / section view, not a floor plan",
+                   "duplicate": "duplicate view of a level already modelled (e.g. structural / sanitary plan)"}
+        for e in list(b.walls.values()) + list(b.openings.values()) + list(b.rooms.values()) + list(b.columns.values()) + list(b.stairs.values()):
+            lv = lv_by_id.get(e.level)
+            if lv is not None and lv.kind in reasons and e.manual_status is None:
+                e.veto(reasons[lv.kind])
 
     def _stage_classify(self, st):
         b = st.building
@@ -307,7 +370,9 @@ class ExtractionPipeline:
         classify_rooms(list(b.room_hypotheses.values()), b.openings, self.cfg)
         for h in b.hypotheses.values():
             h.classification = "hypothesis"
-        st.logs["classify"] = {"partition_threshold_m": limit}
+        from ..classification.plausibility import apply_plausibility
+        plaus = apply_plausibility(b, self.cfg)
+        st.logs["classify"] = {"partition_threshold_m": limit, "plausibility": plaus}
 
     def _stage_validate(self, st):
         b = st.building
@@ -316,7 +381,7 @@ class ExtractionPipeline:
         validate_geometry(rep, st.drawing, st.ctx, st.dup_stats)
         validate_walls(rep, list(b.walls.values()), list(b.columns.values()), tol, self.cfg)
         validate_openings(rep, list(b.openings.values()), list(b.walls.values()), tol, self.cfg)
-        validate_rooms(rep, list(b.rooms.values()), b.labels, tol, self.cfg)
+        validate_rooms(rep, list(b.rooms.values()), b.labels, tol, self.cfg, b.openings)
         for h in b.hypotheses.values():
             c = h.axis.centroid
             rep.add("room", "missing_boundary_hypothesis", "warning", h, (c.x, c.y),

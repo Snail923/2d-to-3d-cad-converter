@@ -47,6 +47,11 @@ def build_model(st, cfg) -> dict[str, Any]:
         x = c.to_dict()
         x["source_entities"] = _src(d, c.source_entities)
         columns.append(x)
+    stairs = []
+    for s_ in b.stairs.values():
+        x = s_.to_dict()
+        x["source_entities"] = _src(d, s_.source_entities)
+        stairs.append(x)
     hyps = [h.to_dict() for h in b.hypotheses.values()]
     hrooms = [r.to_dict() for r in b.room_hypotheses.values()]
     rel = []
@@ -70,7 +75,7 @@ def build_model(st, cfg) -> dict[str, Any]:
             rel.append({"type": "opening_of", "from": o, "to": r.id})
     rep = st.report.to_dict() if st.report else {"summary": {}, "issues": []}
     counts = {}
-    for name, coll in (("walls", walls), ("openings", openings), ("rooms", rooms), ("columns", columns)):
+    for name, coll in (("walls", walls), ("openings", openings), ("rooms", rooms), ("columns", columns), ("stairs", stairs)):
         c = {}
         for x in coll:
             c[x["status"]] = c.get(x["status"], 0) + 1
@@ -93,12 +98,16 @@ def build_model(st, cfg) -> dict[str, Any]:
         "building": {
             "footprint": coords_list(b.footprint) if b.footprint is not None and b.footprint.geom_type == "Polygon" else
             ([coords_list(g) for g in b.footprint.geoms] if b.footprint is not None and hasattr(b.footprint, "geoms") else None),
-            "levels": [{"id": "L0", "name": "Level 0", "elevation": 0.0, "height": None}],
+            "levels": [lv.to_dict() for lv in b.levels] or [{"id": None, "name": "Single level", "elevation": None,
+                                                              "height": None, "kind": "floor_plan", "z": 0.0,
+                                                              "translation": [0.0, 0.0]}],
+            "stacked": bool(b.levels),
         },
         "walls": walls,
         "openings": openings,
         "rooms": rooms,
         "columns": columns,
+        "stairs": stairs,
         "hypotheses": {"walls": hyps, "rooms": hrooms},
         "relationships": rel,
         "validation": rep,
@@ -129,6 +138,13 @@ def phase2_view(model: dict) -> dict:
     m["openings"] = [o for o in model["openings"] if o["status"] in ok and o.get("host_wall") in wall_ids]
     m["rooms"] = [r for r in model["rooms"] if r["status"] in ok]
     m["columns"] = [c for c in model["columns"] if c["status"] in ok]
+    if model.get("building", {}).get("stacked"):
+        floors = {lv["id"] for lv in model["building"]["levels"] if lv.get("kind") == "floor_plan"}
+        for k in ("walls", "openings", "rooms", "columns"):
+            m[k] = [e for e in m[k] if e.get("level") in floors]
+        m["stairs"] = [s_ for s_ in model.get("stairs", []) if s_.get("level") in floors and s_["status"] in ok]
+    else:
+        m["stairs"] = [s_ for s_ in model.get("stairs", []) if s_["status"] in ok]
     return m
 
 
