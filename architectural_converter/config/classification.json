@@ -154,5 +154,28 @@
       "placard",
       "armoire"
     ]
+  },
+  "access": {
+    "_doc": "Room access reasoning (classification/access_solver.py).",
+    "enabled": true,
+    "max_iterations": 50,
+    "door_width_m": [
+      0.6,
+      2.4
+    ],
+    "entry_room_words": [
+      "lobby",
+      "corridor",
+      "hall",
+      "entrance",
+      "entry",
+      "stair",
+      "circulation",
+      "foyer",
+      "landing",
+      "couloir",
+      "entree",
+      "flur"
+    ]
   }
 }

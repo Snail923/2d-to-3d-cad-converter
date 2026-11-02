@@ -1,4 +1,5 @@
 import { Viewer3D } from "./viewer3d.js";
+import * as AI from "./verifier.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (s) => document.querySelector(s);
@@ -53,7 +54,7 @@ const S = {
   corrections: emptyCorr(), history: [], fileName: null, fileBytes: null, sampleRef: null,
   tool: "select", draft: [], vb: null, samples: [], busy: false,
 };
-function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {} }; }
+function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {}, provenance: {} }; }
 
 function setStatus(t) { $("#status").textContent = t; }
 // loading panel with a live step log, elapsed time and a cancel button for long drawings
@@ -183,10 +184,11 @@ async function runFile(name, buf, disabled = [], safe = false) {
     setLoading(null);
     S.busy = false;
   }
-  if (retry) await runFile(name, S.fileBytes, retry[0], retry[1]);
+  if (retry) { await runFile(name, S.fileBytes, retry[0], retry[1]); return; }
+  if (S.model && S.fileName === name) await autoVerify();
 }
 
-async function rerun() {
+async function rerun(fromAi = false) {
   if (!S.model || S.busy) return;
   S.busy = true;
   startJob("Re-running resolution, reconstruction, topology and validation with your corrections…");
@@ -194,9 +196,145 @@ async function rerun() {
     const t0 = performance.now();
     load(JSON.parse(await call("rerun", { corrections: S.corrections })), true);
     setStatus(`Re-run with ${countCorr()} correction(s) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
-  } catch (e) { alert("Re-run failed: " + e.message); }
+  } catch (e) { alert("Re-run failed: " + e.message); return; }
   finally { setLoading(null); S.busy = false; }
+  if (!fromAi) await autoVerify();
 }
+
+// ------------------------------------------------------------------ automatic AI verification
+let AIS = AI.loadSettings();
+let aiStop = false;
+const aiDecisions = [];
+function aiUi() {
+  $("#aiEnabled").checked = AIS.enabled; $("#aiApi").value = AIS.api; $("#aiEndpoint").value = AIS.endpoint;
+  $("#aiModel").value = AIS.model; $("#aiMin").value = AIS.minConfidence;
+  $("#aiBadge").textContent = AIS.enabled ? "on" : "off";
+}
+function aiRead() {
+  AIS.enabled = $("#aiEnabled").checked; AIS.api = $("#aiApi").value; AIS.endpoint = $("#aiEndpoint").value.trim();
+  AIS.model = $("#aiModel").value.trim(); AIS.minConfidence = Math.max(0, Math.min(1, +$("#aiMin").value || 0.7));
+  AI.saveSettings(AIS); aiUi();
+}
+function renderAiLog() {
+  if (!aiDecisions.length) { $("#aiLog").innerHTML = ""; return; }
+  const row = (d) => {
+    const cls = d.error ? "skip" : !d.applied ? "skip" : d.answer === d.claim || (d.kind === "wall" && d.answer === "wall") ? "ok" : "chg";
+    const what = d.error ? `error: ${esc(d.error)}` : `${esc(d.claim)} → <b>${esc(d.answer)}</b> (${d.confidence.toFixed(2)})${d.applied ? "" : " · not applied"}`;
+    return `<tr class="${cls}"><td><a href="#" data-goto="${d.id}">${d.id}</a></td><td>${what}<br><span class="muted">${esc(d.reason || "")}</span></td></tr>`;
+  };
+  $("#aiLog").innerHTML = `<table>${aiDecisions.map(row).join("")}</table>`;
+  for (const a of $$("#aiLog [data-goto]")) a.addEventListener("click", (e) => { e.preventDefault(); select(a.dataset.goto); });
+}
+async function autoVerify(force = false) {
+  if ((!AIS.enabled && !force) || !S.model || S.busy) return;
+  if (!AIS.model) await aiFindModels(true);
+  const v = S.model.verification;
+  if (!v || !v.queue.length) { $("#aiStatus").textContent = "Nothing doubtful to verify."; return; }
+  S.busy = true; aiStop = false; aiDecisions.length = 0;
+  $("#aiStop").style.display = ""; $("#aiRun").disabled = true;
+  let changed = 0;
+  try {
+    for (let round = 1; round <= AIS.rounds && !aiStop; round++) {
+      const queue = S.model.verification.queue;
+      if (!queue.length) break;
+      const dec = await AI.verifyQueue(queue, S.view, AIS, (i, n, it) => {
+        const msg = `AI verification (round ${round}): ${i + 1}/${n} — ${it.id}`;
+        $("#aiStatus").textContent = msg; setStatus(msg);
+      }, () => aiStop);
+      aiDecisions.push(...dec); renderAiLog();
+      if (dec.length && dec.every((d) => d.error)) {
+        $("#aiStatus").innerHTML = `<b>Could not reach the model</b> at ${esc(AIS.endpoint)}: ${esc(dec[0].error)}. In LM Studio: Developer tab → start the server and switch on “Enable CORS”.`;
+        return;
+      }
+      const n = AI.applyDecisions(S.corrections, dec, S.model.verification.answers, AIS);
+      changed += n;
+      renderCorr();
+      if (!n) break;
+      S.busy = false;
+      await rerun(true);
+      S.busy = true;
+    }
+    const nchg = aiDecisions.filter((d) => d.applied && d.answer !== d.claim).length;
+    $("#aiStatus").textContent = `AI verification done: ${aiDecisions.length} checked, ${changed} applied (${nchg} changed the engine's reading).`;
+    setStatus($("#aiStatus").textContent);
+  } finally {
+    S.busy = false; $("#aiStop").style.display = "none"; $("#aiRun").disabled = false;
+  }
+}
+for (const id of ["#aiEnabled", "#aiApi", "#aiEndpoint", "#aiModel", "#aiMin"]) $(id).addEventListener("change", aiRead);
+const AI_PORTS = { lmstudio: "http://localhost:1234", ollama: "http://localhost:11434", openai: "http://localhost:8080" };
+$("#aiApi").addEventListener("change", () => {
+  const ep = $("#aiEndpoint").value;
+  if (!ep || Object.values(AI_PORTS).includes(ep.replace(/\/+$/, ""))) $("#aiEndpoint").value = AI_PORTS[$("#aiApi").value];
+  aiRead();
+});
+async function aiFindModels(quiet = false) {
+  aiRead();
+  try {
+    const models = await AI.listModels(AIS);
+    $("#aiModels").innerHTML = models.map((m) => `<option value="${esc(m.id)}">${m.vision ? "vision" : m.vision === false ? "text only" : ""}${m.loaded ? " · loaded" : ""}</option>`).join("");
+    if (!AIS.model || !models.some((m) => m.id === AIS.model)) { $("#aiModel").value = AI.pickModel(models); aiRead(); }
+    const vis = models.filter((m) => m.vision);
+    $("#aiStatus").innerHTML = models.length ? `${models.length} model(s) found${vis.length ? `, ${vis.length} vision` : ""}. Using <b>${esc(AIS.model)}</b>.` +
+      (vis.length === 0 && models.some((m) => m.vision === false) ? " <b>No vision model found:</b> load a vision (VLM) model in LM Studio." : "")
+      : "The server answered but lists no models: download or load a vision model.";
+    return models;
+  } catch (e) {
+    if (!quiet) $("#aiStatus").innerHTML = `<b>Not reachable:</b> ${esc(e.message)}. Is the LM Studio server running with CORS enabled?`;
+    return [];
+  }
+}
+$("#aiFind").addEventListener("click", () => aiFindModels());
+$("#aiStop").style.display = ""; $("#aiRun").disabled = true;
+  let changed = 0;
+  try {
+    for (let round = 1; round <= AIS.rounds && !aiStop; round++) {
+      const queue = S.model.verification.queue;
+      if (!queue.length) break;
+      const dec = await AI.verifyQueue(queue, S.view, AIS, (i, n, it) => {
+        const msg = `AI verification (round ${round}): ${i + 1}/${n} — ${it.id}`;
+        $("#aiStatus").textContent = msg; setStatus(msg);
+      }, () => aiStop);
+      aiDecisions.push(...dec); renderAiLog();
+      if (dec.length && dec.every((d) => d.error)) {
+        $("#aiStatus").innerHTML = `<b>Could not reach the model</b> at ${esc(AIS.endpoint)}: ${esc(dec[0].error)}. In LM Studio: Developer tab → start the server and switch on “Enable CORS”.`;
+        return;
+      }
+      const n = AI.applyDecisions(S.corrections, dec, S.model.verification.answers, AIS);
+      changed += n;
+      renderCorr();
+      if (!n) break;
+      S.busy = false;
+      await rerun(true);
+      S.busy = true;
+    }
+    const nchg = aiDecisions.filter((d) => d.applied && d.answer !== d.claim).length;
+    $("#aiStatus").textContent = `AI verification done: ${aiDecisions.length} checked, ${changed} applied (${nchg} changed the engine's reading).`;
+    setStatus($("#aiStatus").textContent);
+  } finally {
+    S.busy = false; $("#aiStop").style.display = "none"; $("#aiRun").disabled = false;
+  }
+}
+for (const id of ["#aiEnabled", "#aiApi", "#aiEndpoint", "#aiModel", "#aiMin"]) $(id).addEventListener("change", aiRead);
+$("#aiApi").addEventListener("change", () => {
+  if ($("#aiApi").value === "ollama" && /:1234/.test($("#aiEndpoint").value)) $("#aiEndpoint").value = "http://localhost:11434";
+  if ($("#aiApi").value === "openai" && /:11434/.test($("#aiEndpoint").value)) $("#aiEndpoint").value = "http://localhost:1234";
+  aiRead();
+});
+$("#aiStop").addEventListener("click", () => { aiStop = true; });
+$("#aiRun").addEventListener("click", () => autoVerify(true));
+$("#aiTest").addEventListener("click", async () => {
+  aiRead();
+  $("#aiStatus").textContent = "Contacting " + AIS.endpoint + "…";
+  try { const r = await AI.testConnection(AIS); $("#aiStatus").textContent = `Connected: ${AIS.model} answered “${r.answer}”.`; }
+  catch (e) { $("#aiStatus").innerHTML = `<b>Not reachable:</b> ${esc(e.message)}`; }
+});
+$("#aiUndo").addEventListener("click", async () => {
+  S.history.push(JSON.stringify(S.corrections));
+  AI.removeAiDecisions(S.corrections); aiDecisions.length = 0; renderAiLog(); renderCorr();
+  await rerun(true);
+});
+aiUi();
 
 function load(data, keepView = false) {
   S.data = data; S.model = data.model; S.view = data.view;
@@ -627,7 +765,7 @@ function renderCorr() {
   $("#corrCount").textContent = countCorr();
   $("#corrView").textContent = countCorr() ? JSON.stringify(S.corrections, null, 1) : "No corrections yet.";
 }
-$("#rerun").addEventListener("click", rerun);
+$("#rerun").addEventListener("click", () => rerun());
 $("#undoCorr").addEventListener("click", () => { if (S.history.length) { S.corrections = JSON.parse(S.history.pop()); renderCorr(); drawPending(); } });
 $("#clearCorr").addEventListener("click", () => { S.history.push(JSON.stringify(S.corrections)); S.corrections = emptyCorr(); renderCorr(); drawPending(); });
 $("#dlCorr").addEventListener("click", () => download((S.fileName || "drawing") + ".corrections.json", JSON.stringify(S.corrections, null, 1), "application/json"));

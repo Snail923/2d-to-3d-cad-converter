@@ -120,3 +120,13 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 .loadlog { text-align: left; max-height: 180px; overflow: auto; margin: 10px 0; padding-left: 22px; color: #4a5168; }
 .loadlog li.done { color: #9aa0b1; }
 #loadingTime { margin-top: 6px; color: #3a6df0; }
+
+.aigrid { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 6px 0; }
+.aigrid label { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.aigrid input[type=text], .aigrid select { flex: 1; min-width: 0; }
+.aigrid input[type=number] { width: 64px; }
+#aiLog table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+#aiLog td { border-top: 1px solid #e3e6ea; padding: 2px 3px; vertical-align: top; }
+#aiLog .chg { color: #b3261e; font-weight: 600; }
+#aiLog .ok { color: #2e7d32; }
+#aiLog .skip { color: #888; }

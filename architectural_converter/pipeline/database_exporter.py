@@ -8,6 +8,8 @@ rooms, columns and relationships. Unknown values (heights, single-line thickness
 To target an existing Phase 2 database, implement ``Phase2Adapter.write``."""
 from __future__ import annotations
 
+from ..verification.review_queue import ANSWERS
+
 import json
 import sqlite3
 from typing import Any
@@ -114,6 +116,9 @@ def build_model(st, cfg) -> dict[str, Any]:
         "statistics": {"counts": counts, "timings_s": st.timings, "logs": _jsonable(st.logs),
                        "thickness_clusters": st.ctx.thickness_clusters},
         "corrections": st.corrections,
+        "verification": {"queue": getattr(st, "review_queue", []),
+                         "answers": ANSWERS,
+                         "decisions": st.corrections.get("provenance", {})},
     }
 
 

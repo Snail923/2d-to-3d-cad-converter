@@ -93,7 +93,8 @@ class ArchitecturalEntity:
                     self.notes.append("no strong evidence (gate)")
         if self.manual_status is not None:
             self.status = self.manual_status
-            self.status_reason = "manual correction"
+            if not (self.status_reason or "").startswith("AI verification"):
+                self.status_reason = "manual correction"
             return
         if self.status == Status.REJECTED and self.status_reason and self.status_reason.startswith("veto"):
             return

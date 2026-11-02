@@ -1,0 +1,10 @@
+{
+  "_doc": "Automatic verification by a local vision model. The engine selects the doubtful elements and describes each one; the web app renders a crop of the drawing around it, asks the model and applies confident answers automatically (then re-runs).",
+  "max_items": 40,
+  "crop_margin_m": 2.0,
+  "min_crop_m": 7.0,
+  "max_crop_m": 14.0,
+  "wall_review_max_length_m": 6.0,
+  "auto_apply_min_confidence": 0.7,
+  "max_rounds": 2
+}

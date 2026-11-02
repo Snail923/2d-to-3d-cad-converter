@@ -73,3 +73,44 @@ def test_window_in_closet_partition_becomes_sliding_door():
     assert len(sliding) == 1 and sliding[0].type == "door" and sliding[0].status == Status.NEEDS_REVIEW
     windows = [o for o in ops if o.type == "window"]
     assert len(windows) == 1 and windows[0].classification == "exterior_window"
+
+
+def _bedroom_door_as_window_block():
+    s = PlanSpec("access", "bedroom whose door is drawn with a window block")
+    s.chain([(0, 0), (8, 0), (8, 5), (0, 5)], 0.3, closed=True)
+    s.wall((4, 0), (4, 5), 0.12)
+    s.opening_at((8, 2.5), 1.0, "door")
+    s.opening_at((4, 2.5), 0.9, "window")
+    s.opening_at((2, 5), 1.5, "window")
+    s.opening_at((6, 5), 1.5, "window")
+    s.label("BEDROOM", (2, 2.5))
+    s.label("LIVING", (6, 2.5))
+    doc, _ = render_plan(s, Style(layers="aia", window_repr="block"))
+    p = os.path.join(tempfile.mkdtemp(prefix="acv_"), "access.dxf")
+    doc.saveas(p)
+    return p
+
+
+def test_unreachable_room_gets_its_door_and_is_queued_for_verification():
+    pipe = ExtractionPipeline(PipelineConfig())
+    st = pipe.process(_bedroom_door_as_window_block())
+    acc = st.logs["classify"]["access"]
+    assert acc["unreachable_before"] == 1 and acc["unreachable_after"] == 0
+    oid = acc["windows_to_doors"][0]["opening"]
+    o = st.building.openings[oid]
+    assert o.type == "door" and o.subtype == "access_inferred" and o.status == Status.NEEDS_REVIEW
+    assert not [i for i in st.report.issues if i.code == "no_access"]
+    windows = [x for x in st.building.openings.values() if x.type == "window" and x.status != Status.REJECTED]
+    assert len(windows) == 2 and all(x.classification == "exterior_window" for x in windows)
+    q = st.model["verification"]["queue"]
+    assert q[0]["id"] == oid and q[0]["claim"] == "door" and "BEDROOM" in " ".join(q[0]["context"]["rooms_on_sides"])
+    # an automatic (AI) decision is applied like a correction, recorded with its provenance and locks the item
+    corr = {"status_overrides": {oid: "ACCEPTED"}, "opening_type_overrides": {oid: "sliding_or_closet"},
+            "provenance": {oid: {"by": "ai", "model": "test-model", "verdict": "sliding_or_closet_door",
+                                 "confidence": 0.9, "reason": "wardrobe"}}}
+    st2 = pipe.rerun(st, corr)
+    o2 = st2.building.openings[oid]
+    assert o2.type == "door" and o2.subtype == "sliding_or_closet" and o2.status == Status.ACCEPTED
+    assert o2.status_reason.startswith("AI verification (test-model")
+    assert oid not in [x["id"] for x in st2.model["verification"]["queue"]]
+    assert st2.model["verification"]["decisions"][oid]["by"] == "ai"

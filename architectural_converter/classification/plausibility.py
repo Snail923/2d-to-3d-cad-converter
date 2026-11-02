@@ -20,7 +20,7 @@ from ..models.base_entity import Status
 STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match")
 
 
-def apply_plausibility(b, cfg) -> dict:
+def apply_plausibility(b, cfg, locked=frozenset()) -> dict:
     pc = cfg["classification"].get("plausibility", {})
     if not pc.get("enabled", True):
         return {"skipped": "disabled"}
@@ -31,7 +31,7 @@ def apply_plausibility(b, cfg) -> dict:
     log = {"unhosted_windows_rejected": 0, "interior_windows_to_doors": 0, "closet_windows_to_doors": 0,
            "interior_windows_kept": 0}
     for o in b.openings.values():
-        if o.type != "window" or o.manual_status is not None or o.status == Status.REJECTED:
+        if o.type != "window" or o.id in locked or o.manual_status is not None or o.status == Status.REJECTED:
             continue
         host = b.walls.get(o.host_wall) if o.host_wall else None
         if host is None or host.status == Status.REJECTED:

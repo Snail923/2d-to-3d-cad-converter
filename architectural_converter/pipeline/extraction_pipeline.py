@@ -46,7 +46,7 @@ from ..validation.opening_validation import validate_openings
 from ..validation.room_validation import validate_rooms
 from ..validation.validation_report import ValidationReport
 from ..validation.wall_validation import validate_walls
-from .corrections import (apply_status_overrides, manual_rooms, manual_walls, normalize_corrections)
+from .corrections import (OPENING_TYPES, apply_status_overrides, manual_rooms, manual_walls, normalize_corrections)
 from .pipeline_config import PipelineConfig
 
 def _share_geometry(x, memo):
@@ -80,6 +80,7 @@ class PipelineState:
     windows: list = field(default_factory=list)
     columns: list = field(default_factory=list)
     stairs: list = field(default_factory=list)
+    review_queue: list = field(default_factory=list)
     building: Building | None = None
     solid: Any = None
     report: ValidationReport | None = None
@@ -235,9 +236,9 @@ class ExtractionPipeline:
         corr = st.corrections
         for o in generic:
             t = corr.get("opening_type_overrides", {}).get(o.id)
-            if t:
-                o.type = t
-                o.subtype = "manual"
+            if t in OPENING_TYPES:
+                o.type = OPENING_TYPES[t][0]
+                o.subtype = OPENING_TYPES[t][1] or "manual"
         apply_status_overrides(generic, corr)
         ow = self.cfg["detection"]["weights"]
         th = self.cfg["detection"]["status_thresholds"]
@@ -370,9 +371,14 @@ class ExtractionPipeline:
         classify_rooms(list(b.room_hypotheses.values()), b.openings, self.cfg)
         for h in b.hypotheses.values():
             h.classification = "hypothesis"
+        from ..classification.access_solver import solve_access
         from ..classification.plausibility import apply_plausibility
-        plaus = apply_plausibility(b, self.cfg)
-        st.logs["classify"] = {"partition_threshold_m": limit, "plausibility": plaus}
+        from .corrections import apply_opening_type_overrides
+        locked = apply_opening_type_overrides(list(b.openings.values()), st.corrections)
+        plaus = apply_plausibility(b, self.cfg, locked)
+        access = solve_access(b, self.cfg, locked)
+        classify_openings(list(b.openings.values()), walls)
+        st.logs["classify"] = {"partition_threshold_m": limit, "plausibility": plaus, "access": access}
 
     def _stage_validate(self, st):
         b = st.building
@@ -388,6 +394,8 @@ class ExtractionPipeline:
                     f"Proposed missing wall {h.id}: {h.status_reason}.",
                     "Accept the hypothesis if the wall exists, otherwise ignore it.", h.confidence)
         st.report = rep
+        from ..verification import build_review_queue
+        st.review_queue = build_review_queue(st, self.cfg)
 
     def _stage_export(self, st):
         from .database_exporter import build_model
