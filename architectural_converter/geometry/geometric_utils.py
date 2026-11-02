@@ -154,7 +154,7 @@ def inscribed_width(poly: Polygon, tolerance: float | None = None) -> float:
         if p.area <= 0:
             continue
         minx, miny, maxx, maxy = p.bounds
-        tol = tolerance or max(min(maxx - minx, maxy - miny) / 40.0, 1e-6)
+        tol = tolerance or max(min(maxx - minx, maxy - miny) / 20.0, 0.05)
         try:
             c = polylabel(p, tolerance=tol)
         except Exception:
@@ -252,3 +252,13 @@ def robust_intersection(a, b, grid: float = GRID):
     if not a.intersects(b):   # cheap predicate first: most pairs do not touch
         return GeometryCollection()
     return shapely.intersection(a, b, grid_size=grid)
+
+
+def bbox_pad(geom, pad: float):
+    """Axis-aligned search box around ``geom`` grown by ``pad`` (for spatial-index queries).
+
+    Never built by buffering: the envelope of an axis-parallel line is degenerate and snapping
+    or buffering it can collapse to an empty geometry."""
+    from shapely.geometry import box
+    minx, miny, maxx, maxy = geom.bounds
+    return box(minx - pad, miny - pad, maxx + pad, maxy + pad)

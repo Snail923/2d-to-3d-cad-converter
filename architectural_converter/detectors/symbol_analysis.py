@@ -34,18 +34,38 @@ def door_arcs(ents, cfg_door, tol):
     return out
 
 
+class LineTable:
+    """Line endpoints as arrays, so 'which lines start at this point' is one vector operation."""
+
+    def __init__(self, lines):
+        self.lines = list(lines)
+        if self.lines:
+            self.a = np.array([ln.points[0][:2] for ln in self.lines], dtype=float)
+            self.b = np.array([ln.points[-1][:2] for ln in self.lines], dtype=float)
+            self.L = np.hypot(*(self.b - self.a).T)
+        else:
+            self.a = self.b = np.zeros((0, 2))
+            self.L = np.zeros(0)
+
+
 def leaf_line_for(arc_g, lines, tol, rel):
-    """Line from the arc centre with length ~ radius ending at one arc endpoint."""
-    c = np.array(arc_g.data["center"])
+    """Line from the arc centre with length ~ radius ending at one arc endpoint.
+
+    ``lines`` is a list of line GeoEntities or a prepared ``LineTable`` (much faster when
+    called for many arcs)."""
+    table = lines if isinstance(lines, LineTable) else LineTable(lines)
+    if not table.lines:
+        return None
+    c = np.array(arc_g.data["center"][:2], dtype=float)
     r = arc_g.data["radius"]
+    near = max(4 * tol, 0.03 * r)
+    ok_len = np.abs(table.L - r) <= rel * r
     best = None
-    for ln in lines:
-        p0, p1 = ln.points[0], ln.points[1]
-        for a, b in ((p0, p1), (p1, p0)):
-            if np.hypot(*(a - c)) <= max(4 * tol, 0.03 * r):
-                L = float(np.hypot(*(b - a)))
-                if abs(L - r) <= rel * r:
-                    best = (ln, b)
+    for start, end in ((table.a, table.b), (table.b, table.a)):
+        hit = np.nonzero(ok_len & (np.hypot(*(start - c).T) <= near))[0]
+        if len(hit):
+            k = int(hit[-1])
+            best = (table.lines[k], end[k].copy())
     return best
 
 

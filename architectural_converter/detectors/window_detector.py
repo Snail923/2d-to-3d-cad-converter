@@ -12,9 +12,10 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from shapely.geometry import MultiPoint, Point
+from shapely.geometry import LineString, MultiPoint, Point
+from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import angle_diff, dot, frame_point, mrr_dims, normal, rect_polygon, robust_intersection
+from ..geometry.geometric_utils import angle_diff, bbox_pad, dot, frame_point, mrr_dims, normal, rect_polygon, robust_intersection
 from ..geometry.segment_pairing import cluster_consistency
 from ..models.opening import Opening
 from .base_detector import BaseDetector, register
@@ -27,6 +28,7 @@ class WindowDetector(BaseDetector):
     requires = ("parallel_wall_detector",)
 
     def detect(self, drawing, ctx):
+        self._index_pairs(ctx)
         out = []
         out += self._symbols(drawing, ctx)
         out += self._glazing_groups(ctx)
@@ -67,6 +69,26 @@ class WindowDetector(BaseDetector):
             out.append(o)
         return out
 
+    def _index_pairs(self, ctx):
+        self._pair_sets = {frozenset((pc.i, pc.j)) for pc in ctx.pairs}
+        self._pairs_by_stroke: dict[int, list] = {}
+        for pc in ctx.pairs:
+            self._pairs_by_stroke.setdefault(pc.i, []).append(pc)
+            self._pairs_by_stroke.setdefault(pc.j, []).append(pc)
+
+    def _pairs_near(self, ctx, u, c_lo, c_hi, s0, s1):
+        """Wall pairs whose boundary strokes lie around the given band (spatial lookup)."""
+        if ctx.stroke_tree is None:
+            return ctx.pairs
+        geom = LineString([frame_point(u, s0, (c_lo + c_hi) / 2), frame_point(u, s1, (c_lo + c_hi) / 2)])
+        out, seen = [], set()
+        for k in ctx.stroke_tree.query(bbox_pad(geom, ctx.tol.thickness_max + 0.05)):
+            for pc in self._pairs_by_stroke.get(int(k), []):
+                if id(pc) not in seen:
+                    seen.add(id(pc))
+                    out.append(pc)
+        return out
+
     def _glazing_groups(self, ctx):
         cfg = self.cfg["detection"]["window"]
         tol = ctx.tol
@@ -82,7 +104,7 @@ class WindowDetector(BaseDetector):
             A = ctx.strokes[a]
             n = normal(A.u)
             group = [a]
-            near = [int(k) for k in ctx.stroke_tree.query(A.line().buffer(tol.thickness_max * 1.2 + tol.snap))] \
+            near = [int(k) for k in ctx.stroke_tree.query(bbox_pad(A.line(), tol.thickness_max * 1.2 + tol.snap))] \
                 if ctx.stroke_tree is not None else idx
             for b in sorted(near):
                 if b == a or b in used or b not in in_range:
@@ -105,7 +127,7 @@ class WindowDetector(BaseDetector):
             depth = offs[-1] - offs[0]
             if depth > tol.thickness_max * 1.2:
                 continue
-            if len(group) == 2 and any({pc.i, pc.j} == set(group) for pc in ctx.pairs):
+            if len(group) == 2 and frozenset(group) in self._pair_sets:
                 continue  # the two lines are the faces of a wall piece, not glazing
             in_band = self._in_band(ctx, A.u, offs[0], offs[-1], A.s0, A.s1)
             lay = max(ctx.layer_score(l, "window") for k in group for l in ctx.strokes[k].layers)
@@ -139,7 +161,7 @@ class WindowDetector(BaseDetector):
             return 0.0
         for s in (s0, s1):
             p = frame_point(u, s, (c_lo + c_hi) / 2)
-            for k in ctx.stroke_tree.query(Point(p).buffer(max(tol.snap * 3, (c_hi - c_lo) / 2 + tol.snap))):
+            for k in ctx.stroke_tree.query(bbox_pad(Point(p), max(tol.snap * 3, (c_hi - c_lo) / 2 + tol.snap))):
                 st = ctx.strokes[int(k)]
                 if abs(dot(st.u, u)) < 0.1 and st.length >= (c_hi - c_lo) * 0.8 and st.line().distance(Point(p)) <= tol.snap * 3:
                     hits += 1
@@ -149,7 +171,7 @@ class WindowDetector(BaseDetector):
     def _in_band(self, ctx, u, c_lo, c_hi, s0, s1):
         tol = ctx.tol
         best = 0.0
-        for pc in ctx.pairs:
+        for pc in self._pairs_near(ctx, u, c_lo, c_hi, s0, s1):
             if abs(abs(dot(pc.u, u)) - 1) > 1e-3:
                 continue
             sg = 1.0 if dot(pc.u, u) >= 0 else -1.0
@@ -176,7 +198,7 @@ class WindowDetector(BaseDetector):
                 continue
             # ... and the wall must continue beside the window (same pair, adjacent piece)
             flank = any(pc.i == ob.i and pc.j == ob.j and min(abs(pc.s1 - ob.s0), abs(pc.s0 - ob.s1)) <= 2 * ctx.tol.snap
-                        for pc in ctx.pairs)
+                        for pc in self._pairs_by_stroke.get(ob.i, []))
             if not flank:
                 continue
             o = self._mk(ctx, ob.u, (ob.c_lo + ob.c_hi) / 2, ob.s0, ob.s1, ob.c_hi - ob.c_lo)
@@ -191,16 +213,28 @@ class WindowDetector(BaseDetector):
         return out
 
     def _dedupe(self, cands, ctx):
+        """Merge candidates describing the same window (only spatial neighbours are compared)."""
+        order = sorted(cands, key=lambda x: -len(x.evidence))
+        with_fp = [o for o in order if o.footprint is not None]
+        tree = STRtree([o.footprint for o in with_fp]) if with_fp else None
+        pos = {id(o): k for k, o in enumerate(with_fp)}
+        kept_ids: dict[int, Opening] = {}
         out: list[Opening] = []
-        for o in sorted(cands, key=lambda x: -len(x.evidence)):
+        for o in order:
             merged = False
-            for p in out:
-                if p.footprint is not None and o.footprint is not None:
-                    inter = robust_intersection(p.footprint.buffer(ctx.tol.snap * 2), o.footprint).area
+            if o.footprint is not None and tree is not None:
+                ob = o.footprint.buffer(ctx.tol.snap * 2)
+                for k in sorted(int(i) for i in tree.query(ob, predicate="intersects")):
+                    p = kept_ids.get(k)
+                    if p is None or p is o:
+                        continue
+                    inter = robust_intersection(ob, p.footprint).area
                     if inter >= 0.5 * min(p.footprint.area, o.footprint.area):
                         p.absorb(o)
                         merged = True
                         break
             if not merged:
                 out.append(o)
+                if o.footprint is not None:
+                    kept_ids[pos[id(o)]] = o
         return out

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from shapely.geometry import MultiPoint, Point
+from shapely.geometry import MultiPoint, Point, box
 from shapely.strtree import STRtree
 
 
@@ -14,7 +14,7 @@ def nearest_endpoint_distances(P: np.ndarray, owner: np.ndarray, cap: float) -> 
     tree = STRtree(pts)
     out = np.full(len(P), np.inf)
     for i, p in enumerate(P):
-        idx = tree.query(Point(p).buffer(cap, 4))
+        idx = tree.query(box(p[0] - cap, p[1] - cap, p[0] + cap, p[1] + cap))
         best = np.inf
         for j in idx:
             j = int(j)
@@ -42,7 +42,7 @@ def cluster_points(P: np.ndarray, tol: float) -> np.ndarray:
         labels[i] = k
         while stack:
             a = stack.pop()
-            for j in tree.query(Point(P[a]).buffer(tol, 4)):
+            for j in tree.query(box(P[a][0] - tol, P[a][1] - tol, P[a][0] + tol, P[a][1] + tol)):
                 j = int(j)
                 if labels[j] < 0 and np.hypot(*(P[j] - P[a])) <= tol:
                     labels[j] = k

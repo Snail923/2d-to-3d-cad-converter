@@ -47,7 +47,8 @@ self.onmessage = async (ev) => {
       const name = (args.name || "input.dxf").replace(/[^A-Za-z0-9._-]/g, "_");
       const path = "/tmp/" + name;
       py.FS.writeFile(path, new Uint8Array(args.bytes));
-      result = bridge.process(path, args.corrections ? JSON.stringify(args.corrections) : null, null);
+      result = bridge.process(path, args.corrections ? JSON.stringify(args.corrections) : null,
+                              args.config ? JSON.stringify(args.config) : null);
     } else if (cmd === "rerun") {
       result = bridge.rerun(JSON.stringify(args.corrections));
     } else if (cmd === "export_json") {

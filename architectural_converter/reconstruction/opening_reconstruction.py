@@ -175,7 +175,7 @@ class OpeningReconstructor:
         done = set()
         while queue:
             w, e = queue.pop(0)
-            if w not in live or (id(w), e) in done:
+            if id(w) not in self._live_ids or (id(w), e) in done:
                 continue
             done.add((id(w), e))
             connected = self._connected(w, e, live)
@@ -255,7 +255,7 @@ class OpeningReconstructor:
                 self.log["hosted_on_continuous_wall"] += 1
             else:
                 self.log["unhosted"] += 1
-        walls[:] = [w for w in walls if w in live or w.status == Status.REJECTED]
+        walls[:] = [w for w in walls if id(w) in self._live_ids or w.status == Status.REJECTED]
         return generic
 
     def _generic(self, host, a, b, generic):

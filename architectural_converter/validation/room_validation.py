@@ -57,7 +57,7 @@ def validate_rooms(report, rooms, labels, tol, cfg):
     for lb in labels:
         if lb.category != "room_name":
             continue
-        if not any(r.polygon.contains(Point(lb.position)) for r in live):
+        if rtree is None or len(rtree.query(Point(lb.position), predicate="within")) == 0:
             report.add("room", "missing_room", "warning", None, lb.position,
                        f"Room label '{lb.text.splitlines()[0]}' is not inside any detected room.",
                        "The room boundary is probably incomplete; review the room hypotheses near this label.", 0.7,

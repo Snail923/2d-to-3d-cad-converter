@@ -18,7 +18,7 @@ from shapely.geometry import MultiPoint, Polygon
 from ..geometry.geometric_utils import mrr_dims, robust_union
 from ..models.opening import Opening
 from .base_detector import BaseDetector, register
-from .symbol_analysis import door_arcs, leaf_line_for
+from .symbol_analysis import LineTable, door_arcs, leaf_line_for
 
 
 def _sector(c, r, a0, a1):
@@ -69,6 +69,7 @@ class DoorDetector(BaseDetector):
     # ------------------------------------------------------------------
     def _leaves(self, arcs, lines, cfg, tol):
         res = []
+        lines = lines if isinstance(lines, LineTable) else LineTable(lines)
         for a in arcs:
             c = np.array(a.data["center"])
             r = a.data["radius"]

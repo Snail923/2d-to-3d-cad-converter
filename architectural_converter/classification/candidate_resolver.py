@@ -17,7 +17,7 @@ import numpy as np
 from shapely.geometry import Point
 from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import angle_diff, dir_angle, dot, frame_point, normal, robust_union, robust_intersection
+from ..geometry.geometric_utils import angle_diff, dir_angle, dot, frame_point, normal, robust_union, robust_intersection, safe_buffer, bbox_pad
 from ..models.base_entity import Status
 from ..models.wall import Wall
 
@@ -163,7 +163,7 @@ class CandidateResolver:
     def _context_evidence(self, walls, ctx):
         tol = ctx.tol
         fills = [h.polygon for h in ctx.hatch_regions if h.cls == "wall_fill"]
-        fill_u = robust_union(fills).buffer(tol.snap * 2) if fills else None
+        fill_u = safe_buffer(robust_union(fills), tol.snap * 2) if fills else None
         cov_min = self.cfg["detection"]["hatch"]["coverage_for_fill_evidence"]
         for w in walls:
             p = w.polygon()
@@ -195,11 +195,13 @@ class CandidateResolver:
 
     def _absorb_polygons(self, walls, tol, log):
         straight = [w for w in walls if w.kind in ("straight", "arc") and w.polygon() is not None]
-        su = robust_union([w.polygon() for w in straight]).buffer(tol.snap * 3) if straight else None
+        stree = STRtree([w.polygon() for w in straight]) if straight else None
         out = []
         for w in walls:
-            if w.kind == "polygon" and su is not None and w.shape is not None:
-                cov = robust_intersection(su, w.shape).area / max(w.shape.area, 1e-12)
+            if w.kind == "polygon" and stree is not None and w.shape is not None:
+                near = [straight[int(k)].polygon() for k in stree.query(bbox_pad(w.shape, tol.snap * 3))]
+                su = safe_buffer(robust_union(near), tol.snap * 3) if near else None
+                cov = robust_intersection(su, w.shape).area / max(w.shape.area, 1e-12) if su is not None else 0.0
                 if cov >= 0.85:
                     for s in straight:
                         if s.polygon().intersects(w.shape):

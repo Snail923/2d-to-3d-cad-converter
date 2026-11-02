@@ -15,7 +15,7 @@ function startWorker() {
   worker = new Worker("worker.js" + (_py ? "?pyodide=" + encodeURIComponent(_py) : ""));
   worker.onmessage = (ev) => {
     const m = ev.data;
-    if (m.type === "progress") { setLoading(m.msg); return; }
+    if (m.type === "progress") { S.lastProgress = m.msg; setLoading(m.msg); return; }
     const p = pending.get(m.id);
     if (!p) return;
     pending.delete(m.id);
@@ -143,26 +143,41 @@ async function loadSample() {
   await runFile(file, buf);
 }
 
-async function runFile(name, buf) {
+async function runFile(name, buf, disabled = []) {
   if (S.busy) return;
   S.busy = true;
   S.fileName = name; S.fileBytes = buf.slice(0);
   S.corrections = emptyCorr(); S.history = [];
-  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
+  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` +
+    (disabled.length ? ` without ${disabled.join(", ")}` : "") + "…");
   const t0 = performance.now();
+  let retry = null;
   try {
-    const res = await call("process", { name, bytes: buf }, [buf]);
+    const config = disabled.length ? { runtime: { disabled_detectors: disabled } } : null;
+    const res = await call("process", { name, bytes: buf, config }, [buf]);
     load(JSON.parse(res));
-    setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+      (disabled.length ? ` (skipped after an engine error: ${disabled.join(", ")})` : ""));
   } catch (e) {
     if (/engine restarted/.test(e.message)) return;  // cancelled by the user
-    setStatus("Error: " + e.message + " — restarting the engine…");
-    alert("Processing failed:\n" + e.message + "\n\nThe engine will be restarted. Please report the drawing if this repeats.");
-    try { await recoverEngine(); setStatus("Engine restarted after an error. You can load another drawing."); } catch (e2) { setStatus("Engine restart failed: " + e2.message); }
+    // A native geometry error kills the Python runtime. If it happened inside one detector,
+    // restart and run again without that detector instead of losing the whole drawing.
+    const m = /detector ([a-z ]+)$/.exec(S.lastProgress || "");
+    const det = m ? m[1].trim().replace(/ /g, "_") : null;
+    setStatus("Engine error: " + e.message + " — restarting…");
+    try { await recoverEngine(); } catch (e2) { setStatus("Engine restart failed: " + e2.message); return; }
+    if (det && !disabled.includes(det) && disabled.length < 3) {
+      retry = disabled.concat([det]);
+      setStatus(`The ${det.replace(/_/g, " ")} hit a geometry error on this drawing; re-running without it…`);
+    } else {
+      setStatus("Processing failed: " + e.message + ". The engine was restarted; please report the drawing.");
+      alert("Processing failed:\n" + e.message + "\n\n(last step: " + (S.lastProgress || "?") + ")");
+    }
   } finally {
     setLoading(null);
     S.busy = false;
   }
+  if (retry) await runFile(name, S.fileBytes, retry);
 }
 
 async function rerun() {

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from shapely.geometry import Point
 
-from ..geometry.geometric_utils import dot, merge_intervals, normal
+from ..geometry.geometric_utils import dot, merge_intervals, normal, bbox_pad
 
 
 def associate_faces(walls, ctx) -> None:
@@ -23,7 +23,7 @@ def associate_faces(walls, ctx) -> None:
         n = normal(w.u)
         cov = {-1: [], 1: []}
         offs = {-1: [], 1: []}
-        for k in ctx.stroke_tree.query(poly.buffer(tol.snap * 3)):
+        for k in ctx.stroke_tree.query(bbox_pad(poly, tol.snap * 3)):
             st = ctx.strokes[int(k)]
             if abs(abs(dot(st.u, w.u)) - 1) > 1e-3:
                 continue

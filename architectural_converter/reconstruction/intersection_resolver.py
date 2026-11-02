@@ -16,7 +16,7 @@ import math
 from shapely.geometry import Point
 from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import dot, frame_point, line_intersection
+from ..geometry.geometric_utils import dot, frame_point, line_intersection, bbox_pad
 from ..models.wall import Wall
 
 
@@ -42,7 +42,7 @@ def resolve_junctions(walls: list[Wall], tol, cfg) -> int:
         for e in (0, 1):
             p, out = _end(w, e)
             best = None
-            for k in tree.query(Point(p).buffer(search)):
+            for k in tree.query(bbox_pad(Point(p), search)):
                 v = straight[int(k)]
                 if v is w:
                     continue

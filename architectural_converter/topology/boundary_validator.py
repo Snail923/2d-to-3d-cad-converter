@@ -1,7 +1,7 @@
 """Boundary support of a room polygon (used for manual rooms and hypotheses)."""
 from __future__ import annotations
 
-from ..geometry.geometric_utils import robust_union, robust_intersection
+from ..geometry.geometric_utils import robust_union, robust_intersection, safe_buffer
 
 
 from ..models.base_entity import Status
@@ -15,7 +15,7 @@ def boundary_support(polygon, walls, tol) -> dict:
     for key, polys in (("accepted_walls", acc), ("any_walls", allw)):
         polys = [p for p in polys if p is not None]
         if polys:
-            u = robust_union(polys).buffer(tol.snap * 4)
+            u = safe_buffer(robust_union(polys), tol.snap * 4)
             out[key] = robust_intersection(polygon.exterior, u).length / L
         else:
             out[key] = 0.0

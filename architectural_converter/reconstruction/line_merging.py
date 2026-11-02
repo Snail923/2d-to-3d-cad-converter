@@ -10,7 +10,7 @@ from __future__ import annotations
 from shapely.strtree import STRtree
 
 from ..classification.candidate_resolver import aligned, same_band
-from ..geometry.geometric_utils import rect_polygon, robust_union, robust_intersection
+from ..geometry.geometric_utils import rect_polygon, robust_union, robust_intersection, safe_buffer
 from ..models.wall import Wall
 
 
@@ -87,7 +87,7 @@ def merge_collinear(walls: list[Wall], tol, covered_factor: float = 1.3) -> list
                     polys = [p for o, p in (bodies[int(k)] for k in btree.query(gp, predicate="intersects"))
                              if o is not a and o is not b] if btree is not None else []
                     cover = robust_union(polys)
-                    if not cover.is_empty and robust_intersection(cover.buffer(tol.snap), gp).area >= 0.9 * gp.area:
+                    if not cover.is_empty and robust_intersection(safe_buffer(cover, tol.snap), gp).area >= 0.9 * gp.area:
                         reason = "continuous through junction"
                 if reason:
                     merge_into(a, b, reason, (g0, g1) if gap > 0 else None)

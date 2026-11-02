@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from shapely.geometry import Point
 
-from ..geometry.geometric_utils import frame_point, polygons_of, rect_polygon, thin_fraction, inscribed_width, robust_union
+from ..geometry.geometric_utils import frame_point, polygons_of, rect_polygon, thin_fraction, inscribed_width, robust_union, safe_buffer
 from ..geometry.geometry_adapter import Segment, build_strokes
 from ..geometry.segment_pairing import find_pairs, resolve_side_conflicts
 from ..models.wall import Wall
@@ -44,9 +44,10 @@ class HatchWallDetector(BaseDetector):
         pieces, _ = find_pairs(strokes, tol, self.cfg["detection"]["parallel"])
         fill = robust_union([r.polygon for r in regions])
         good = []
+        fill_b = safe_buffer(fill, tol.snap)
         for p in pieces:
             mid = frame_point(p.u, (p.s0 + p.s1) / 2, p.c)
-            if fill.buffer(tol.snap).contains(Point(mid)):
+            if fill_b.contains(Point(mid)):
                 p.score = p.length
                 good.append(p)
         good = resolve_side_conflicts(good, strokes, tol.snap)

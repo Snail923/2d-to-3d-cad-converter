@@ -11,8 +11,9 @@ from __future__ import annotations
 import re
 
 from shapely.geometry import Point, Polygon
+from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import inscribed_width, make_valid_polygonal, polygons_of, safe_buffer, robust_union, robust_difference, robust_intersection
+from ..geometry.geometric_utils import inscribed_width, make_valid_polygonal, polygons_of, safe_buffer, robust_union, robust_difference, robust_intersection, bbox_pad
 from ..models.base_entity import Status
 from ..models.room import Room
 
@@ -60,10 +61,17 @@ class RoomDetector:
         solid = wall_solid(walls, columns, tol, self.cfg, extra)
         if solid is None:
             return [], None, {"candidates": 0}
-        accepted = [w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.ACCEPTED]
-        acc_u = robust_union([p for p in accepted if p is not None]).buffer(tol.snap * 3) if accepted else None
-        review = [w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.NEEDS_REVIEW]
-        rev_u = robust_union([p for p in review if p is not None]).buffer(tol.snap * 3) if review else None
+        accepted = [p for p in (w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.ACCEPTED) if p is not None]
+        review = [p for p in (w.polygon(max(tol.snap * 2, 0.01)) for w in walls if w.status == Status.NEEDS_REVIEW) if p is not None]
+        acc_tree = STRtree(accepted) if accepted else None
+        rev_tree = STRtree(review) if review else None
+
+        def local(tree, polys, geom):
+            # union + buffer of the walls around one room only (never of the whole drawing)
+            if tree is None:
+                return None
+            near = [polys[int(k)] for k in tree.query(bbox_pad(geom, tol.snap * 4))]
+            return safe_buffer(robust_union(near), tol.snap * 3) if near else None
         op_polys = []
         wmap = {w.id: w for w in walls}
         for o in openings:
@@ -72,9 +80,10 @@ class RoomDetector:
                 from ..geometry.geometric_utils import rect_polygon
                 op_polys.append(rect_polygon(w.u, w.c, o.host_interval[0], o.host_interval[1],
                                              (w.thickness or tol.snap * 2) + tol.snap * 4))
-        op_u = robust_union(op_polys) if op_polys else None
+        op_tree = STRtree(op_polys) if op_polys else None
         rooms = []
         log = {"candidates": 0, "tiny": 0, "narrow": 0, "large": 0}
+        lindex = self.label_index(labels)
         for hp in holes_of(solid):
             log["candidates"] += 1
             area = hp.area
@@ -85,10 +94,13 @@ class RoomDetector:
             width = inscribed_width(hp)
             bnd = hp.exterior
             L = bnd.length
+            acc_u = local(acc_tree, accepted, hp)
+            rev_u = local(rev_tree, review, hp)
             f_acc = robust_intersection(bnd, acc_u).length / L if acc_u is not None else 0.0
             f_rev = robust_intersection(robust_difference(bnd, acc_u), rev_u).length / L if (rev_u is not None and acc_u is not None) else (
                 robust_intersection(bnd, rev_u).length / L if rev_u is not None else 0.0)
-            f_op = robust_intersection(bnd, op_u).length / L if op_u is not None else 0.0
+            near_op = [op_polys[int(k)] for k in op_tree.query(hp)] if op_tree is not None else []
+            f_op = robust_intersection(bnd, robust_union(near_op)).length / L if near_op else 0.0
             r.boundary_support = {"accepted_walls": f_acc, "review_walls": f_rev, "openings": f_op,
                                   "inscribed_width": width}
             r.add_evidence("wall_support", min(1.0, f_acc + 0.6 * f_rev + 0.3 * f_op))
@@ -107,7 +119,7 @@ class RoomDetector:
                 log["large"] += 1
             else:
                 r.add_evidence("size_plausibility", 1.0)
-            self._labels(r, labels)
+            self._labels(r, labels, lindex)
             rooms.append(r)
         w = self.cfg["detection"]["weights"]["room"]
         th = self.cfg["detection"]["status_thresholds"]
@@ -115,13 +127,23 @@ class RoomDetector:
             r.score(w, th)
         return rooms, solid, log
 
-    def _labels(self, r: Room, labels):
+    @staticmethod
+    def label_index(labels):
+        pts = [Point(lb.position) for lb in labels]
+        return (STRtree(pts), pts) if pts else (None, [])
+
+    def _labels(self, r: Room, labels, index=None):
         names = []
         cc = self.cfg["classification"]
-        for lb in labels:
+        if index is None:
+            index = self.label_index(labels)
+        tree, pts = index
+        inside = sorted(int(k) for k in tree.query(r.polygon, predicate="contains")) if tree is not None else []
+        for k in inside:
+            lb = labels[k]
             if lb.category not in ("room_name", "room_number", "area"):
                 continue
-            if r.polygon.contains(Point(lb.position)):
+            if True:
                 r.label_ids.append(lb.id)
                 r.source_entities.add(lb.raw_id)
                 if lb.category in ("room_name", "room_number"):

@@ -10,7 +10,7 @@ from shapely.geometry import Point
 from shapely.strtree import STRtree
 
 from ..classification.candidate_resolver import same_band
-from ..geometry.geometric_utils import dot
+from ..geometry.geometric_utils import dot, bbox_pad
 from ..models.base_entity import Status
 from .graph_builder import build_wall_graph
 
@@ -37,7 +37,7 @@ def topology_evidence(walls, columns, tol):
             pt = Point(w.point_at(w.s1 if e else w.s0))
             hit = False
             if tree is not None:
-                for k in tree.query(pt.buffer(tol.snap * 2)):
+                for k in tree.query(bbox_pad(pt, tol.snap * 2)):
                     v, p = bodies[int(k)]
                     if v is w or p.distance(pt) > tol.snap * 2:
                         continue

@@ -49,6 +49,18 @@ from ..validation.wall_validation import validate_walls
 from .corrections import (apply_status_overrides, manual_rooms, manual_walls, normalize_corrections)
 from .pipeline_config import PipelineConfig
 
+def _share_geometry(x, memo):
+    return x
+
+
+try:  # shapely 2 geometries are immutable: deep copies (re-run cache) can share them
+    import shapely.geometry as _sg
+    for _cls in (_sg.Point, _sg.LineString, _sg.LinearRing, _sg.Polygon, _sg.MultiPoint, _sg.MultiLineString,
+                 _sg.MultiPolygon, _sg.GeometryCollection):
+        copy._deepcopy_dispatch[_cls] = _share_geometry
+except Exception:  # pragma: no cover
+    pass
+
 STAGES = ["ingest", "preprocess", "context", "detect", "resolve", "reconstruct", "topology", "classify",
           "validate", "export"]
 
@@ -165,7 +177,11 @@ class ExtractionPipeline:
 
     def _stage_detect(self, st):
         ctx = st.ctx
-        enabled = [n for n in self.cfg["detection"]["enabled_detectors"] if n in DETECTORS]
+        disabled = set(self.cfg["runtime"].get("disabled_detectors") or [])
+        enabled = [n for n in self.cfg["detection"]["enabled_detectors"] if n in DETECTORS and n not in disabled]
+        for n in sorted(disabled):
+            st.drawing.issues.append({"stage": "detect", "severity": "warning",
+                                      "message": f"Detector {n} was disabled for this run"})
         for name in run_order(enabled):
             if name == "text_detector":
                 continue  # labels are produced while building the context

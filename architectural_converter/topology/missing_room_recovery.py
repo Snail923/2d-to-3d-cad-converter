@@ -16,7 +16,7 @@ import math
 from shapely.geometry import LineString, Point
 from shapely.strtree import STRtree
 
-from ..geometry.geometric_utils import robust_union, canonical_dir, dot, normal, robust_intersection
+from ..geometry.geometric_utils import bbox_pad, canonical_dir, dot, normal, robust_intersection, robust_union
 from ..models.base_entity import Status
 from ..models.room import Room
 from ..models.wall import Wall
@@ -30,8 +30,9 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
     live = [w for w in walls if w.status != Status.REJECTED]
     ends = free_ends(live, tol)
     room_polys = [r.polygon for r in rooms if r.status != Status.REJECTED]
+    rtree = STRtree(room_polys) if room_polys else None
     orphan = [lb for lb in labels if lb.category in ("room_name", "room_number")
-              and not any(p.contains(Point(lb.position)) for p in room_polys)]
+              and (rtree is None or len(rtree.query(Point(lb.position), predicate="within")) == 0)]
     multi = [r for r in rooms if len(r.label_texts) > 1]
     if not ends:
         return [], [], {"free_ends": 0, "proposals": 0, "kept": 0, "orphan_labels": len(orphan)}
@@ -53,7 +54,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
             proposals.append((p, q, w, best[1].id, "collinear extension"))
     etree = STRtree([Point(e[2]) for e in ends])
     for i in range(len(ends)):
-        for j in sorted(int(k) for k in etree.query(Point(ends[i][2]).buffer(maxlen))):
+        for j in sorted(int(k) for k in etree.query(bbox_pad(Point(ends[i][2]), maxlen))):
             if j <= i:
                 continue
             (wa, ea, pa), (wb, eb, pb) = ends[i], ends[j]
@@ -68,6 +69,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
     base_holes = [h for h in holes_of(base_solid) if h.area >= vc["min_room_area_m2"]]
     kept = []
     new_rooms = []
+    lindex = room_detector.label_index(labels)
     seen = set()
     for p, q, w, other, why in proposals[: 4 * rc["hypothesis_max_count"]]:
         key = (round(p[0], 2), round(p[1], 2), round(q[0], 2), round(q[1], 2))
@@ -108,7 +110,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         kept.append(hyp)
         for h in created:
             r = Room(id=ids.new("room_hypothesis"), polygon=h, is_hypothesis=True, hypothesis_walls=[hyp.id])
-            room_detector._labels(r, labels)
+            room_detector._labels(r, labels, lindex)
             r.confidence = hyp.confidence
             r.status = Status.NEEDS_REVIEW
             r.status_reason = "room enclosed only if hypothesis wall is accepted"

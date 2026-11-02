@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from ..geometry.geometric_utils import robust_union, robust_intersection
+from ..geometry.geometric_utils import robust_union, robust_intersection, bbox_pad
 
 import networkx as nx
 import numpy as np
@@ -38,7 +38,7 @@ def build_axis_graph(walls, tol) -> nx.Graph:
         mid = p.interpolate(0.5, normalized=True)
         wid = None
         best = None
-        for i in tree.query(mid.buffer(tol.snap)):
+        for i in tree.query(bbox_pad(mid, tol.snap)):
             d = axes[int(i)][1].distance(mid)
             if best is None or d < best:
                 best, wid = d, axes[int(i)][0]
@@ -84,7 +84,7 @@ def free_ends(walls, tol):
             pt = Point(w.point_at(w.s1 if e else w.s0))
             ok = False
             if tree is not None:
-                for k in tree.query(pt.buffer(tol.snap * 2)):
+                for k in tree.query(bbox_pad(pt, tol.snap * 2)):
                     v, p = items[int(k)]
                     if v is not w and p.distance(pt) <= tol.snap * 2:
                         ok = True
