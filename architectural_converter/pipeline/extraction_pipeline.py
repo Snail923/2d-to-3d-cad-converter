@@ -81,6 +81,7 @@ class PipelineState:
     columns: list = field(default_factory=list)
     stairs: list = field(default_factory=list)
     review_queue: list = field(default_factory=list)
+    symbol_labels: dict | None = None
     building: Building | None = None
     solid: Any = None
     report: ValidationReport | None = None
@@ -114,9 +115,10 @@ class ExtractionPipeline:
 
     # ------------------------------------------------------------------ public API
     def process(self, input_file: str, corrections: dict | None = None, until: str = "export",
-                doc=None) -> PipelineState:
+                doc=None, symbol_labels: dict | None = None) -> PipelineState:
         st = PipelineState(input_file=input_file)
         st.corrections = normalize_corrections(corrections)
+        st.symbol_labels = symbol_labels
         st._doc = doc
         for stage in STAGES:
             self.run_stage(st, stage)
@@ -124,13 +126,17 @@ class ExtractionPipeline:
                 break
         return st
 
-    def rerun(self, st: PipelineState, corrections: dict | None = None, from_stage: str = "resolve") -> PipelineState:
-        """Re-run from ``resolve`` (default) using cached detection results."""
+    def rerun(self, st: PipelineState, corrections: dict | None = None, from_stage: str = "resolve",
+              symbol_labels: dict | None = None) -> PipelineState:
+        """Re-run from ``resolve`` (default) using cached detection results.
+        ``symbol_labels`` (SymPointV2 output, see ``learned``) replaces the stored labels when given."""
         if corrections is not None:
             st.corrections = normalize_corrections(corrections)
+        if symbol_labels is not None:
+            st.symbol_labels = symbol_labels or None
         start = STAGES.index(from_stage)
         if start <= STAGES.index("detect"):
-            return self.process(st.input_file, st.corrections)
+            return self.process(st.input_file, st.corrections, symbol_labels=st.symbol_labels)
         st.ctx.candidates = copy.deepcopy(st.detected)
         st.ctx.ids = copy.deepcopy(st.ids_after_detect)
         st.completed = st.completed[:start]
@@ -229,6 +235,12 @@ class ExtractionPipeline:
                 st.drawing.issues.append({"stage": "resolve", "severity": "warning",
                                           "message": f"stair detector failed: {e}"})
         st.logs["stairs"] = slog
+        from ..learned.fusion import Labels, fuse_resolved
+        st._labels = Labels(st.symbol_labels, self.cfg)
+        if st._labels:
+            self._report("Step 5/10: learned symbol evidence")
+            st.logs["learned"] = {"entities_labelled": len(st._labels.ent), "model": st._labels.model,
+                                  "resolve": fuse_resolved(walls, columns, st.stairs, st._labels, st.drawing)}
 
     def _stage_reconstruct(self, st):
         walls, generic, log = reconstruct(st.walls, st.doors, st.windows, st.ctx, self.cfg)
@@ -334,10 +346,8 @@ class ExtractionPipeline:
             if geom is None:
                 return None
             c = geom.representative_point() if hasattr(geom, "representative_point") else Point(geom)
-            for lv, bx in boxes:
-                if bx.contains(c):
-                    return lv.id
-            return None
+            hits = [(lv.kind != "floor_plan", bx.area, lv.id) for lv, bx in boxes if bx.contains(c)]
+            return min(hits)[2] if hits else None          # tightest floor plan first
         for w in b.walls.values():
             w.level = wall_level.get(w.id) or locate(w.polygon(0.05) or w.axis)
         for o in b.openings.values():
@@ -353,7 +363,9 @@ class ExtractionPipeline:
         for s_ in b.stairs.values():
             s_.level = locate(s_.polygon)
         reasons = {"elevation_or_section": "drawn in an elevation / section view, not a floor plan",
-                   "duplicate": "duplicate view of a level already modelled (e.g. structural / sanitary plan)"}
+                   "duplicate": "duplicate view of a level already modelled (e.g. structural / sanitary plan)",
+                   "roof_plan": "roof plan (roof outline / parapets), not stacked as a storey",
+                   "sheet_frame": "sheet border / title block lines, not a wall"}
         for e in list(b.walls.values()) + list(b.openings.values()) + list(b.rooms.values()) + list(b.columns.values()) + list(b.stairs.values()):
             lv = lv_by_id.get(e.level)
             if lv is not None and lv.kind in reasons and e.manual_status is None:
@@ -375,6 +387,9 @@ class ExtractionPipeline:
         from ..classification.plausibility import apply_plausibility
         from .corrections import apply_opening_type_overrides
         locked = apply_opening_type_overrides(list(b.openings.values()), st.corrections)
+        if getattr(st, "_labels", None):
+            from ..learned.fusion import fuse_openings
+            st.logs.setdefault("learned", {})["openings"] = fuse_openings(b, st._labels, st.drawing, locked)
         plaus = apply_plausibility(b, self.cfg, locked)
         access = solve_access(b, self.cfg, locked)
         classify_openings(list(b.openings.values()), walls)

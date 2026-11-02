@@ -1,0 +1,26 @@
+{
+  "_doc": "Learned evidence from SymPointV2 (see learned/ and tools/sympoint_service). Labels are evidence only: they never create geometry. Vetoes and re-typing need a confident majority of the candidate's own DXF lines.",
+  "sympoint": {
+    "tile_m": 30.0,
+    "overlap_m": 4.0,
+    "min_label_score": 0.35,
+    "min_coverage": 0.3,
+    "veto_share": 0.6,
+    "veto_score": 0.6,
+    "retype_share": 0.5,
+    "opening_search_m": 0.6
+  },
+  "groups": {
+    "wall": ["wall", "curtain wall"],
+    "railing": ["railing"],
+    "door": ["single door", "double door", "sliding door", "folding door", "revolving door", "rolling door"],
+    "window": ["window", "bay window", "blind window"],
+    "opening": ["opening symbol"],
+    "stair": ["stairs", "escalator"],
+    "wardrobe": ["Wardrobe"],
+    "furniture": ["sofa", "bed", "chair", "table", "TV cabinet", "cabinet", "gas stove", "sink", "refrigerator",
+                  "airconditioner", "bath", "bath tub", "washing machine", "squat toilet", "urinal", "toilet",
+                  "row chairs"],
+    "other": ["elevator", "parking spot"]
+  }
+}

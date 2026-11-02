@@ -24,7 +24,7 @@ import networkx as nx
 from ..models.base_entity import Status
 
 OUTSIDE = "__outside__"
-STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match")
+STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match", "learned_label")
 
 
 def _live(e):
@@ -90,48 +90,47 @@ def solve_access(b, cfg, locked=frozenset()) -> dict:
     for r in b.rooms.values():
         if _live(r):
             levels.setdefault(r.level, []).append(r)
-    for it in range(ac["max_iterations"]):
+    for it in range(ac["max_iterations"] + 1):
         G = access_graph(b)
-        changed = False
-        unreachable_total = 0
+        bad_all = []
         for lvl, rooms in levels.items():
             src = _sources(b, G, cfg, rooms)
             reach = set()
-            for s in src:
-                if s in G:
-                    reach |= nx.node_connected_component(G, s)
-            bad = [r for r in rooms if r.id not in reach and r.area >= min_area
-                   and r.classification != "shaft_or_void"]
-            unreachable_total += len(bad)
-            for r in sorted(bad, key=lambda x: x.id):
-                cands = []
-                for oid in sorted(r.openings):
-                    o = b.openings.get(oid)
-                    if not _live(o) or o.type != "window" or o.id in locked or o.manual_status is not None:
-                        continue
-                    others = [x for x in o.rooms if x != r.id and x in G]
-                    host = b.walls.get(o.host_wall)
-                    if not others or (host is not None and host.classification == "exterior_wall"):
-                        continue          # a window to the outside never explains a missing door
-                    cands.append(o)
-                if not cands:
-                    continue
-                o = min(cands, key=lambda x: _rank(x, cfg))
-                o.type, o.subtype, o.sill_height = "door", "access_inferred", None
-                o.classification = "interior_door"
-                o.notes.append(f"room {r.id}{' (' + r.name + ')' if r.name else ''} had no access: "
-                               "the most door-like window on its boundary is read as a door")
-                o.status_reason = "access reasoning: window re-typed as door"
-                o.confidence = max(th["review"], min(o.confidence, round(th["accept"] - 0.01, 4)))
-                o.status = Status.NEEDS_REVIEW
-                log["windows_to_doors"].append({"opening": o.id, "room": r.id})
-                changed = True
-                break                     # one change per pass, then recompute reachability
-            if changed:
-                break
+            for s_ in src:
+                if s_ in G:
+                    reach |= nx.node_connected_component(G, s_)
+            bad_all += [r for r in rooms if r.id not in reach and r.area >= min_area
+                        and r.classification != "shaft_or_void"]
         if it == 0:
-            log["unreachable_before"] = unreachable_total
-        log["unreachable_after"] = unreachable_total
-        if not changed:
+            log["unreachable_before"] = len(bad_all)
+        log["unreachable_after"] = len(bad_all)
+        if it == ac["max_iterations"]:
+            break
+        fixed = False
+        for r in sorted(bad_all, key=lambda x: x.id):
+            cands = []
+            for oid in sorted(r.openings):
+                o = b.openings.get(oid)
+                if not _live(o) or o.type != "window" or o.id in locked or o.manual_status is not None:
+                    continue
+                others = [x for x in o.rooms if x != r.id and x in G]
+                host = b.walls.get(o.host_wall)
+                if not others or (host is not None and host.classification == "exterior_wall"):
+                    continue          # a window to the outside never explains a missing door
+                cands.append(o)
+            if not cands:
+                continue
+            o = min(cands, key=lambda x: _rank(x, cfg))
+            o.type, o.subtype, o.sill_height = "door", "access_inferred", None
+            o.classification = "interior_door"
+            o.notes.append(f"room {r.id}{' (' + r.name + ')' if r.name else ''} had no access: "
+                           "the most door-like window on its boundary is read as a door")
+            o.status_reason = "access reasoning: window re-typed as door"
+            o.confidence = max(th["review"], min(o.confidence, round(th["accept"] - 0.01, 4)))
+            o.status = Status.NEEDS_REVIEW
+            log["windows_to_doors"].append({"opening": o.id, "room": r.id})
+            fixed = True
+            break                     # one change per pass, then recompute reachability
+        if not fixed:
             break
     return log

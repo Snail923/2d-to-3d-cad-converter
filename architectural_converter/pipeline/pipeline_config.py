@@ -13,7 +13,7 @@ from typing import Any
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 SECTIONS = ("tolerances", "thickness", "detection", "reconstruction", "classification",
-            "validation", "phase2", "layer_semantics", "levels", "verification")
+            "validation", "phase2", "layer_semantics", "levels", "verification", "learned")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

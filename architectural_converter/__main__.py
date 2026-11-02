@@ -27,6 +27,9 @@ def main(argv=None):
     ap.add_argument("--units", choices=["mm", "cm", "dm", "m", "in", "ft"], help="force drawing units")
     ap.add_argument("--no-3d", action="store_true", help="skip the Phase 2 GLB export")
     ap.add_argument("--benchmark", action="store_true", help="run the benchmark suite instead")
+    ap.add_argument("--sympoint-url", help="SymPointV2 service (e.g. http://localhost:8790): fuse its symbol labels")
+    ap.add_argument("--sympoint-request", help="write the SymPointV2 request JSON here (for offline inference)")
+    ap.add_argument("--sympoint-response", help="SymPointV2 response JSON from offline inference (needs the same drawing)")
     a = ap.parse_args(argv)
     if a.benchmark:
         from .benchmark.run_benchmark import main as bench
@@ -47,6 +50,26 @@ def main(argv=None):
             corr = json.load(fh)
     pipe = ExtractionPipeline(cfg)
     st = pipe.process(a.input, corrections=corr, until=a.until)
+    if st.model is not None and (a.sympoint_url or a.sympoint_request or a.sympoint_response):
+        from .learned import export_tiles, labels_from_response
+        req = export_tiles(st.drawing, cfg)
+        if a.sympoint_request:
+            with open(a.sympoint_request, "w", encoding="utf-8") as fh:
+                json.dump(req, fh)
+            print(f"SymPointV2 request: {len(req['tiles'])} tile(s), {req['primitives']} primitives -> {a.sympoint_request}")
+        resp = None
+        if a.sympoint_url:
+            import urllib.request
+            r = urllib.request.Request(a.sympoint_url.rstrip("/") + "/predict", data=json.dumps(req).encode(),
+                                       headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(r, timeout=1800) as fh:
+                resp = json.load(fh)
+        elif a.sympoint_response:
+            with open(a.sympoint_response, encoding="utf-8") as fh:
+                resp = json.load(fh)
+        if resp is not None:
+            st = pipe.rerun(st, symbol_labels=labels_from_response(req, resp))
+            print("SymPointV2 fusion:", json.dumps(st.logs.get("learned", {})))
     os.makedirs(a.out, exist_ok=True)
     if st.model is None:
         print(f"Stopped after stage '{a.until}'. Timings: {st.timings}")

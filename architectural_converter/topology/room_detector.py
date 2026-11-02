@@ -53,15 +53,26 @@ def wall_solid(walls, columns, tol, cfg, extra=None):
     return solid
 
 
-def holes_of(solid, grow: float = 0.0):
-    """Enclosed holes of the solid (minus islands inside them), grown back by ``grow``."""
+def holes_of(solid, grow: float = 0.0, near=None):
+    """Enclosed holes of the solid (minus islands inside them), grown back by ``grow``.
+
+    Islands are found with a spatial index over the solid's own components (never by
+    intersecting the whole solid with every hole, which is quadratic on large drawings).
+    ``near``: only holes intersecting this geometry are returned."""
     out = []
-    for poly in polygons_of(solid):
+    comps = polygons_of(solid)
+    if not comps:
+        return out
+    tree = STRtree(comps)
+    for poly in comps:
         for ring in poly.interiors:
             hp = Polygon(ring)
-            inner = robust_intersection(solid, hp)
-            if not inner.is_empty and inner.area > 0:
-                hp = robust_difference(hp, solid)
+            if near is not None and not hp.intersects(near):
+                continue
+            islands = [comps[int(k)] for k in tree.query(hp) if comps[int(k)] is not poly
+                       and hp.contains(comps[int(k)].representative_point())]
+            if islands:
+                hp = robust_difference(hp, robust_union(islands))
             for q in polygons_of(hp):
                 if grow > 0:
                     q = safe_buffer(q, grow, join_style=2)

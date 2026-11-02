@@ -89,6 +89,18 @@
       <summary>Selection</summary>
       <div id="details" class="details"><span class="muted">Click a wall, opening, room, column or hypothesis.</span></div>
     </details>
+    <details open id="spPanel">
+      <summary>SymPointV2 symbol detector <span id="spBadge" class="badge">off</span></summary>
+      <div class="corr">
+        <p class="small muted">A learned symbol detector (doors, windows, wardrobes, furniture, stairs, walls) running on <b>your GPU</b>
+          (see <code>tools/sympoint_service</code>). Its labels are added as evidence to every element; they never create geometry.</p>
+        <label class="small"><input type="checkbox" id="spEnabled"> run after every drawing is loaded</label>
+        <div class="aigrid small"><label>address <input id="spEndpoint" type="text" spellcheck="false"></label></div>
+        <div class="row"><button id="spTest" class="btn small">Test connection</button>
+          <button id="spRun" class="btn small">Run SymPointV2 now</button></div>
+        <div id="spStatus" class="small"></div>
+      </div>
+    </details>
     <details open id="aiPanel">
       <summary>Automatic AI verification <span id="aiBadge" class="badge">off</span></summary>
       <div class="corr">

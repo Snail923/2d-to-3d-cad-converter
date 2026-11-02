@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from ..models.base_entity import Status
 
-STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match")
+STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match", "learned_label")
 
 
 def apply_plausibility(b, cfg, locked=frozenset()) -> dict:

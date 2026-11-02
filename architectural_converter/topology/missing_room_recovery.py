@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import shapely
+
 import math
 
 from shapely.geometry import LineString, Point
@@ -67,7 +69,7 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
             proposals.append((pa, pb, wa, wb.id, "link free ends"))
     base_solid = wall_solid(live, columns, tol, cfg)
     rg = close_radius(tol, cfg)
-    base_holes = [h for h in holes_of(base_solid, rg) if h.area >= vc["min_room_area_m2"]]
+    win = float(rc.get("hypothesis_window_m", 40.0))
     kept = []
     new_rooms = []
     lindex = room_detector.label_index(labels)
@@ -86,9 +88,14 @@ def recover_missing_rooms(walls, columns, rooms, labels, tol, cfg, ids, room_det
         hp = hyp.polygon(max(tol.snap * 2, 0.01))
         if hp is None:
             continue
-        holes = holes_of(robust_union([base_solid, hp.buffer(rg, join_style=2)]), rg)  # base solid reused
+        # only the neighbourhood of the hypothesis can change: clip the solid to a window around it
+        x0, y0, x1, y1 = hp.bounds
+        local = shapely.clip_by_rect(base_solid, x0 - win, y0 - win, x1 + win, y1 + win)
+        grown = hp.buffer(rg, join_style=2)
+        before = [b for b in holes_of(local, rg, near=grown) if b.area >= vc["min_room_area_m2"]]
+        holes = holes_of(robust_union([local, grown]), rg, near=grown)
         created = [h for h in holes if h.area >= vc["min_room_area_m2"]
-                   and not any(abs(h.area - b.area) < 0.01 * b.area and robust_intersection(h, b).area > 0.98 * h.area for b in base_holes)]
+                   and not any(abs(h.area - b.area) < 0.01 * b.area and robust_intersection(h, b).area > 0.98 * h.area for b in before)]
         if not created:
             continue
         conf = rc["hypothesis_confidence"]

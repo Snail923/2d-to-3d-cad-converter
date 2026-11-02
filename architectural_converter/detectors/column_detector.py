@@ -14,6 +14,22 @@ from ..models.column import Column
 from .base_detector import BaseDetector, register
 
 
+def _block_names(drawing, raw_ids) -> set[str]:
+    out = set()
+    raw = drawing.raw_entities
+    for rid in raw_ids:
+        r = raw.get(rid)
+        if r is None:
+            continue
+        if r.block_name:
+            out.add(r.block_name.lower())
+        for iid in tuple(r.block_path) + (r.id,):
+            ins = drawing.inserts.get(iid)
+            if ins is not None:
+                out.add(ins.name.lower())
+    return out
+
+
 @register
 class ColumnDetector(BaseDetector):
     name = "column_detector"
@@ -112,7 +128,18 @@ class ColumnDetector(BaseDetector):
             lay = max((ctx.layer_score(l, "column") for l in m["layers"] if l), default=0.0)
             furn = max((ctx.layer_score(l, "furniture") for l in m["layers"] if l), default=0.0)
             col.add_evidence("layer_match", lay if lay > 0 else (0.5 if not furn else 0.0))
+            # block names count too: a shape inside "sofa 2_top" is furniture whatever its layer
+            words = ctx.cfg["layer_semantics"]["categories"]["furniture"]["strong"]
+            names = _block_names(drawing, m["srcs"])
+            if any(wd in nm for nm in names for wd in words):
+                furn = 1.0
+                col.notes.append("inside a furniture block (" + ", ".join(sorted(names))[:60] + ")")
             col.add_evidence("not_furniture", 1.0 - furn)
+            grid = max((ctx.layer_score(l, "grid") for l in m["layers"] if l), default=0.0)
+            if grid >= 0.5:
+                col.veto("drawn on a grid / axis layer (grid bubble, not a column)")
+            elif furn >= 0.9 and lay < 0.5:
+                col.veto("furniture symbol, not a column")
             if m["name_hint"]:
                 col.add_evidence("name_hint", m["name_hint"])
             same = sum(1 for (w2, L2) in sizes if abs(w2 - w) <= 0.03 * w + tol.snap and abs(L2 - L) <= 0.03 * L + tol.snap) - 1

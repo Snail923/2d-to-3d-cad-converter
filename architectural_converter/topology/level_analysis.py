@@ -78,6 +78,80 @@ def level_tag(text: str) -> tuple[int, str] | None:
     return None
 
 
+ATTIC_RANK, ROOF_RANK = 90, 99
+
+
+def rank_name(rank: int) -> str:
+    if rank < 0:
+        return f"Basement {-rank}"
+    if rank == 0:
+        return "Ground floor"
+    if rank == ATTIC_RANK:
+        return "Attic"
+    if rank == ROOF_RANK:
+        return "Roof"
+    return f"Floor {rank}"
+
+
+def _reconcile(plans, log):
+    """Make level names agree with the FFL values.
+
+    FFL values are measured; names often come from texts that merely mention another floor
+    ("stair to ground floor"). The FFL-annotated views are put in elevation order and the offset
+    between that order and the named ranks is voted; with a clear majority every FFL view gets
+    the rank of its position (names that disagree are corrected and say so)."""
+    ffl = [lv for lv in plans if lv.elevation is not None]
+    if len(ffl) < 2:
+        return
+    elevs = []
+    for e in sorted(lv.elevation for lv in ffl):
+        if not elevs or e - elevs[-1] > 0.3:
+            elevs.append(e)
+    pos = {lv.id: min(range(len(elevs)), key=lambda i: abs(elevs[i] - lv.elevation)) for lv in ffl}
+    votes: dict[int, int] = {}
+    for lv in ffl:
+        if lv.rank is not None and lv.rank < ATTIC_RANK:
+            k = lv.rank - pos[lv.id]
+            votes[k] = votes.get(k, 0) + 1
+    if not votes:
+        return
+    k, n = max(votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))
+    total = sum(votes.values())
+    if n < 2 or n <= total / 2:
+        return
+    log["rank_offset"] = {"offset": k, "votes": n, "of": total}
+    top = len(elevs) - 1
+    for lv in ffl:
+        r = pos[lv.id] + k
+        if lv.rank is not None and lv.rank >= ATTIC_RANK and pos[lv.id] == top:
+            continue                                   # attic / roof named on the top level: keep
+        if lv.rank != r:
+            old = lv.name or "unnamed"
+            lv.rank, lv.name = r, rank_name(r)
+            lv.sources.append(f"name corrected from '{old}' by FFL order")
+
+
+def _fill_elevations(plans, cfg):
+    """Views with a level name but no FFL get an elevation from the named levels around them."""
+    known = sorted((lv.rank, lv.elevation) for lv in plans if lv.elevation is not None and lv.rank is not None
+                   and lv.rank < ATTIC_RANK)
+    if not known:
+        return
+    hs = [(e2 - e1) / (r2 - r1) for (r1, e1), (r2, e2) in zip(known, known[1:]) if r2 != r1]
+    typical = float(np.median(hs)) if hs else float(cfg["phase2"]["wall_height_m"])
+    top_e = max(lv.elevation for lv in plans if lv.elevation is not None)
+    for lv in plans:
+        if lv.elevation is not None or lv.rank is None:
+            continue
+        if lv.rank >= ATTIC_RANK:
+            lv.elevation = top_e + typical
+        else:
+            r0, e0 = min(known, key=lambda re_: abs(re_[0] - lv.rank))
+            lv.elevation = e0 + (lv.rank - r0) * typical
+        lv.sources.append(f"elevation {lv.elevation:.2f} inferred from level name")
+        lv.confidence = min(lv.confidence, 0.6)
+
+
 def parse_ffl(texts: list[tuple[str, tuple[float, float], float]]) -> list[float]:
     """Finished-floor-level values from texts (value with FFL marker, or number next to an FFL word)."""
     vals = []
@@ -192,7 +266,16 @@ def analyze_levels(walls, labels, strokes, tol, cfg, ids=None):
     label_pts = [Point(lb.position) for lb in labels]
     ltree = STRtree(label_pts) if label_pts else None
     levels: list[Level] = []
+    fmax = int(lc.get("sheet_frame_max_walls", 8))
+
+    def encloses(a, b):
+        return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
     for k, (ws, bb) in enumerate(views):
+        if len(ws) <= fmax and any(len(ws2) > len(ws) and encloses(bb, bb2) for ws2, bb2 in views if bb2 is not bb):
+            levels.append(Level(id=f"level_{k + 1:02d}", name="Sheet frame", rank=None, elevation=None,
+                                kind="sheet_frame", bbox=bb, wall_ids=[w.id for w in ws],
+                                sources=["few lines enclosing a drawing: sheet border / title block"]))
+            continue
         w_, h_ = bb[2] - bb[0], bb[3] - bb[1]
         margin = max(2.0, 0.15 * max(w_, h_))
         region = box(bb[0] - margin, bb[1] - margin, bb[2] + margin, bb[3] + margin)
@@ -230,31 +313,36 @@ def analyze_levels(walls, labels, strokes, tol, cfg, ids=None):
             lv.confidence = 0.9 if (lv.elevation is not None and lv.rank is not None) else 0.7
         levels.append(lv)
     plans = [lv for lv in levels if lv.kind == "floor_plan"]
-    # one view per level: a second view of the same level (structural, sanitary, roof plan...) is a duplicate
+    _reconcile(plans, log)
+    # roof plans show parapets / roof outlines: not a storey to stack
+    for lv in plans:
+        if lv.rank == ROOF_RANK:
+            lv.kind = "roof_plan"
+            lv.sources.append("roof plan: not stacked as a storey")
+    plans = [lv for lv in levels if lv.kind == "floor_plan"]
+    # one view per level: a second view of the same level (structural, sanitary, furniture plan...) is a duplicate
     def key(lv):
-        return round(lv.elevation, 1) if lv.elevation is not None else ("rank", lv.rank)
+        return ("rank", lv.rank) if lv.rank is not None else ("elev", round(lv.elevation, 1))
     by_key: dict = {}
     for lv in plans:
         by_key.setdefault(key(lv), []).append(lv)
     for lst in by_key.values():
-        lst.sort(key=lambda lv: -len(lv.wall_ids))
+        lst.sort(key=lambda lv: (lv.elevation is None, -len(lv.wall_ids)))      # FFL-annotated, then largest
         for dup in lst[1:]:
             dup.kind = "duplicate"
             dup.sources.append(f"same level as {lst[0].id}")
     plans = [lv for lv in levels if lv.kind == "floor_plan"]
     if len(plans) < 2:
         return levels, {}, dict(log, stacked=False, reason="fewer than two identified floor levels")
-    # order: by elevation where known, else by rank
-    def order(lv):
-        if lv.elevation is not None:
-            return (0, lv.elevation)
-        return (1, lv.rank if lv.rank is not None else 0)
-    plans.sort(key=order)
+    _fill_elevations(plans, cfg)
+    plans.sort(key=lambda lv: (lv.elevation if lv.elevation is not None else 1e9, lv.rank or 0))
     for lv in plans:
         if not lv.name:
             lv.name = f"Level {lv.elevation:+.2f}" if lv.elevation is not None else lv.id
     # alignment onto the reference (largest) floor by voting on linework end points
-    ref = max(plans, key=lambda lv: len(lv.wall_ids))
+    typical = [lv for lv in plans if lv.sources and any(x.startswith("FFL") for x in lv.sources)
+               and lv.rank is not None and -50 < lv.rank < 50] or plans
+    ref = max(typical, key=lambda lv: len(lv.wall_ids))
     def pts_in(bb):
         P = []
         reg = box(*bb)
@@ -310,5 +398,6 @@ def analyze_levels(walls, labels, strokes, tol, cfg, ids=None):
             wall_level[wid] = lv.id
     log.update({"stacked": True, "floor_plans": len(plans), "reference": ref.id,
                 "kinds": {k: sum(1 for lv in levels if lv.kind == k) for k in
-                          ("floor_plan", "elevation_or_section", "duplicate", "unidentified")}})
+                          ("floor_plan", "elevation_or_section", "duplicate", "roof_plan", "sheet_frame",
+                           "unidentified")}})
     return levels, wall_level, log

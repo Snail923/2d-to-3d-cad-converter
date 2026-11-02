@@ -101,7 +101,8 @@
       "cycle_support": 1.2,
       "aspect": 0.6,
       "thinness": 0.8,
-      "manual": 10.0
+      "manual": 10.0,
+      "learned_label": 1.5
     },
     "door": {
       "symbol": 2.0,
@@ -112,7 +113,8 @@
       "host_wall": 1.5,
       "width_plausibility": 1.0,
       "gap_match": 1.2,
-      "manual": 10.0
+      "manual": 10.0,
+      "learned_label": 1.5
     },
     "window": {
       "symbol": 2.0,
@@ -127,12 +129,14 @@
       "gap_match": 1.2,
       "not_wall_thickness": 0.8,
       "manual": 10.0,
-      "not_furniture": 1.0
+      "not_furniture": 1.0,
+      "learned_label": 1.5
     },
     "opening": {
       "gap_geometry": 1.0,
       "host_wall": 1.0,
-      "width_plausibility": 1.0
+      "width_plausibility": 1.0,
+      "learned_label": 1.5
     },
     "column": {
       "size_plausibility": 1.0,
@@ -144,7 +148,8 @@
       "grid_alignment": 0.8,
       "wall_contact": 0.6,
       "not_furniture": 1.0,
-      "manual": 10.0
+      "manual": 10.0,
+      "learned_label": 1.5
     },
     "room": {
       "wall_support": 2.0,
@@ -161,7 +166,8 @@
       "layer_match": 1.5,
       "stair_text": 1.2,
       "stringers": 1.0,
-      "manual": 10.0
+      "manual": 10.0,
+      "learned_label": 1.5
     }
   },
   "gates": {

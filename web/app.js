@@ -185,7 +185,7 @@ async function runFile(name, buf, disabled = [], safe = false) {
     S.busy = false;
   }
   if (retry) { await runFile(name, S.fileBytes, retry[0], retry[1]); return; }
-  if (S.model && S.fileName === name) await autoVerify();
+  if (S.model && S.fileName === name) { await autoSymPoint(); await autoVerify(); }
 }
 
 async function rerun(fromAi = false) {
@@ -200,6 +200,50 @@ async function rerun(fromAi = false) {
   finally { setLoading(null); S.busy = false; }
   if (!fromAi) await autoVerify();
 }
+
+// ------------------------------------------------------------------ SymPointV2 (learned symbol evidence)
+const SP_KEY = "cad2d3d.sympoint";
+let SP = { enabled: false, endpoint: "http://localhost:8790" };
+try { Object.assign(SP, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
+function spUi() { $("#spEnabled").checked = SP.enabled; $("#spEndpoint").value = SP.endpoint; $("#spBadge").textContent = SP.enabled ? "on" : "off"; }
+function spRead() {
+  SP.enabled = $("#spEnabled").checked; SP.endpoint = $("#spEndpoint").value.trim().replace(/\/+$/, "");
+  try { localStorage.setItem(SP_KEY, JSON.stringify(SP)); } catch { /* private mode */ }
+  spUi();
+}
+async function autoSymPoint(force = false) {
+  if ((!SP.enabled && !force) || !S.model || S.busy) return;
+  S.busy = true;
+  const t0 = performance.now();
+  try {
+    $("#spStatus").textContent = "Preparing the drawing for SymPointV2…";
+    const req = await call("sympoint_request");
+    const nt = JSON.parse(req).tiles.length;
+    $("#spStatus").textContent = `SymPointV2: sending ${nt} tile(s) to ${SP.endpoint}…`; setStatus($("#spStatus").textContent);
+    const r = await fetch(SP.endpoint + "/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: req });
+    if (!r.ok) throw new Error(`service answered ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const resp = await r.text();
+    startJob("Fusing SymPointV2 symbol labels and re-running…", false);
+    load(JSON.parse(await call("apply_sympoint", { response: resp })), true);
+    const lg = (S.model.statistics.logs || {}).learned || {};
+    const rs = lg.resolve || {}, op = lg.openings || {};
+    $("#spStatus").innerHTML = `SymPointV2: ${lg.entities_labelled || 0} DXF entities labelled in ${((performance.now() - t0) / 1000).toFixed(1)} s ·
+      ${rs.walls_vetoed || 0} wall(s), ${rs.columns_vetoed || 0} column(s), ${op.rejected || 0} opening(s) rejected as furniture ·
+      ${op.windows_to_doors || 0} window(s) → door · ${op.openings_typed || 0} gap(s) typed.`;
+    setStatus("SymPointV2 labels fused.");
+  } catch (e) {
+    $("#spStatus").innerHTML = `<b>SymPointV2 not available:</b> ${esc(e.message)}. Start <code>sympoint_server.py</code> on the GPU machine.`;
+  } finally { setLoading(null); S.busy = false; }
+}
+$("#spEnabled").addEventListener("change", spRead);
+$("#spEndpoint").addEventListener("change", spRead);
+$("#spRun").addEventListener("click", async () => { spRead(); await autoSymPoint(true); });
+$("#spTest").addEventListener("click", async () => {
+  spRead();
+  try { const j = await (await fetch(SP.endpoint + "/health")).json(); $("#spStatus").textContent = `Connected: ${j.model} on ${j.device}.`; }
+  catch (e) { $("#spStatus").innerHTML = `<b>Not reachable:</b> ${esc(e.message)}`; }
+});
+spUi();
 
 // ------------------------------------------------------------------ automatic AI verification
 let AIS = AI.loadSettings();
@@ -285,42 +329,6 @@ async function aiFindModels(quiet = false) {
   }
 }
 $("#aiFind").addEventListener("click", () => aiFindModels());
-$("#aiStop").style.display = ""; $("#aiRun").disabled = true;
-  let changed = 0;
-  try {
-    for (let round = 1; round <= AIS.rounds && !aiStop; round++) {
-      const queue = S.model.verification.queue;
-      if (!queue.length) break;
-      const dec = await AI.verifyQueue(queue, S.view, AIS, (i, n, it) => {
-        const msg = `AI verification (round ${round}): ${i + 1}/${n} — ${it.id}`;
-        $("#aiStatus").textContent = msg; setStatus(msg);
-      }, () => aiStop);
-      aiDecisions.push(...dec); renderAiLog();
-      if (dec.length && dec.every((d) => d.error)) {
-        $("#aiStatus").innerHTML = `<b>Could not reach the model</b> at ${esc(AIS.endpoint)}: ${esc(dec[0].error)}. In LM Studio: Developer tab → start the server and switch on “Enable CORS”.`;
-        return;
-      }
-      const n = AI.applyDecisions(S.corrections, dec, S.model.verification.answers, AIS);
-      changed += n;
-      renderCorr();
-      if (!n) break;
-      S.busy = false;
-      await rerun(true);
-      S.busy = true;
-    }
-    const nchg = aiDecisions.filter((d) => d.applied && d.answer !== d.claim).length;
-    $("#aiStatus").textContent = `AI verification done: ${aiDecisions.length} checked, ${changed} applied (${nchg} changed the engine's reading).`;
-    setStatus($("#aiStatus").textContent);
-  } finally {
-    S.busy = false; $("#aiStop").style.display = "none"; $("#aiRun").disabled = false;
-  }
-}
-for (const id of ["#aiEnabled", "#aiApi", "#aiEndpoint", "#aiModel", "#aiMin"]) $(id).addEventListener("change", aiRead);
-$("#aiApi").addEventListener("change", () => {
-  if ($("#aiApi").value === "ollama" && /:1234/.test($("#aiEndpoint").value)) $("#aiEndpoint").value = "http://localhost:11434";
-  if ($("#aiApi").value === "openai" && /:11434/.test($("#aiEndpoint").value)) $("#aiEndpoint").value = "http://localhost:1234";
-  aiRead();
-});
 $("#aiStop").addEventListener("click", () => { aiStop = true; });
 $("#aiRun").addEventListener("click", () => autoVerify(true));
 $("#aiTest").addEventListener("click", async () => {
