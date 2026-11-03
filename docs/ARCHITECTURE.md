@@ -51,6 +51,14 @@ run on its own: `ExtractionPipeline.process(path, until="detect")`, then `run_st
   The role combines block-name and layer hints with a geometric signature: a swing arc plus a leaf line means a door;
   equal parallel thin lines mean a window; a compact closed or filled shape means a column. Large wall-bearing blocks
   (*assemblies*, for example hotel room modules) are transparent, so their lines are ordinary linework.
+  The geometric signatures are generic and furniture matches them too (wardrobes, counters, TV units, bath tubs), so:
+  when the block's name or layer says furniture / fixture and nothing says door / window / column, its geometric
+  scores are discounted (`symbols.furniture_semantic_discount`); a window signature is halved when the block is
+  mostly curves or its parallel lines do not span it jamb to jamb. Name / layer scores are kept separately
+  (`semantic_scores`) so geometry is never mistaken for a name hint later.
+* **Non-building layers**: loose linework on layers whose primary category is listed in
+  `layer_semantics.non_building_categories` (dimension, annotation, ignore, furniture) never becomes wall faces,
+  glazing or treads.
 * **Texts**: room names (multilingual keyword table), room numbers, area annotations, tags. **Dimensions**:
   measurement plus definition points. **Fills**: hatch and solid regions classified as wall fill (thin everywhere),
   column fill, area fill or other.
@@ -67,7 +75,7 @@ the pipeline.
 | `hatch_wall_detector` | Only *wall-fill* regions. Their boundaries are paired with the extra condition that the material lies inside the fill. Unpaired thin parts become polygon walls. |
 | `layer_wall_detector` | Produces layer-evidence *linework* candidates only. They are attached to geometric walls that share the same boundary segments, or discarded. |
 | `single_line_wall_detector` | Unpaired lines with support from layer, network connectivity (gap-tolerant along the wall direction), and enclosed room-sized faces. Small isolated networks (furniture) are excluded. A drawing-level convention check applies: if most wall-like linework is already double-line, a single line also needs explicit wall-layer evidence. Thickness stays `None`. |
-| `door_detector` | Swing leaves come from blocks and loose geometry (arc with plausible radius and sweep, plus leaf line). The opening chord runs from the hinge to the closed-leaf point. Double doors are paired across sources. Sliding doors are door blocks without arcs. |
+| `door_detector` | Swing leaves come from blocks and loose geometry (arc with plausible radius and sweep, plus leaf line). The leaf is the radial line (LINE or polyline part) whose tip lands on an arc end point best; frame / threshold lines of the same length near the hinge do not count. The opening chord runs from the hinge to the *other* arc end (closed leaf); the open-leaf chord is kept as a fallback, so the gap in the wall decides when the leaf is ambiguous. Double doors are paired across sources. Sliding doors are door blocks without arcs. |
 | `window_detector` | Window symbols, glazing line groups (in a wall band or on a window layer, not on furniture layers), and band obstructions inside real wall bands (a thickness class of the drawing, with the wall continuing beside it). |
 | `column_detector` | Compact closed or filled shapes, symbols, and loops drawn by their own short lines. Evidence includes fill, layer, repetition and grid alignment. |
 
@@ -90,13 +98,15 @@ the pipeline.
    Every extension is recorded, and the detected interval is kept.
 3. Merge again: T-junctions are now filled, so walls run through them.
 4. `opening_reconstruction`: a ray is cast from each free wall end along the wall axis:
-   * the gap is opening-sized and a door/window chord lies in it → the opening is hosted and the wall made continuous;
+   * the gap is opening-sized and a door/window chord lies in it → the opening is hosted and the wall made continuous
+     (chords tried: detected, alternative swing position, and the hinge swung along the wall by the leaf radius);
    * the gap is opening-sized with no symbol → an *unidentified opening* (NEEDS_REVIEW, hypothesis);
    * the gap is smaller than an opening and continues the same wall → closed as a recorded low-confidence
      reconstruction;
    * a gap crossed by another wall is never bridged (e.g. partitions facing each other across a corridor);
    * wider gaps stay open (validation and room recovery report them).
-   Symbols drawn over continuous walls are hosted by projection.
+   Symbols drawn over continuous walls are hosted by projection (doors with a known leaf only by their closed chord).
+   An unidentified gap that a door / window already occupies on the same wall is a duplicate and is dropped.
 5. `wall_pairing`: links face strokes to each final wall, measures face support, and re-measures thickness from both
    faces.
 
@@ -129,18 +139,42 @@ the pipeline.
 A flight is ≥ `min_treads` parallel lines of similar length (0.6–3 m) at a regular spacing (going 0.20–0.42 m).
 Evidence: regularity, tread count, stair layer, an UP / DN marker or "stair" label, and side lines (stringers /
 walls). Geometry alone is gated to NEEDS_REVIEW. Wall candidates built from a live flight's treads are vetoed (two
-treads 0.3 m apart look like a 0.3 m wall). The rise is the storey height / risers when that gives ≤ 0.21 m.
-Otherwise the flight is treated as one flight of a multi-flight stair and gets the default rise. Phase 2 builds
-stepped solids.
+treads 0.3 m apart look like a 0.3 m wall), and so are walls drawn only with stair-layer lines inside a flight
+(stringers, landing edge, well outline).
+
+Walking direction: an UP / DN text, or an **arrow head** on the flight (two short symmetric strokes meeting at an
+apex, pointing along the run). **Assemblies** (`assemble_flights`): parallel flights side by side (well ≤
+`max_well_m`) with overlapping runs form a *switchback* (consecutive flights climb in opposite directions); flights
+in line separated by ≤ `max_landing_m` form a *straight stair with landing* (same direction). A direction read on
+one flight propagates to the others. The landing of a switchback is the end where the stair well is closed by a
+wall within 1.5 flight widths (then: where the flight ends line up); the first flight climbs towards it. Each
+flight gets `flight_index`, `base_height` and the `landing` polygon at its top (clipped by walls).
+
+Rise: one flight climbing its storey at ≤ 0.21 m → storey height / risers. An assembly shares the storey over all
+its risers; with no level annotation, Phase 2's storey (wall height + slab) is used as a recorded assumption when
+it gives a plausible rise. Otherwise the default rise. Phase 2 builds stepped solids from each flight's
+`base_height`, plus the landing slabs.
 
 ## Stages 8–9: classification and validation
 * Walls are exterior when one face runs along the building footprint. Partitions are interior walls at or below a
   thickness limit derived from the drawing's own thickness classes. Openings are exterior or interior. Columns are
   engaged or free-standing. Rooms are typed from labels first, then geometry (corridor, service room).
+  A wall running inside an exterior wall's body (duplicate / second facade line) is exterior too.
+* **Balconies** (`classification/balcony.py`): *railing elements* are exterior walls clearly lighter than the
+  drawing's own facade (≤ `railing_max_rel_thickness` × length-weighted exterior thickness, or single lines), or on a
+  balcony / terrace / railing / parapet layer. A room is a balcony when ≥ `min_outline_share` of its edge is on the
+  building outline, railing elements make up ≥ `min_railing_share` of that part (thin lines running inside a thicker
+  facade do not count), and a non-railing wall attaches it to the building; a balcony / terrace label decides alone.
+  Its railings become `railing` (Phase 2: `railing_height_m`), and walls between it and indoor rooms become the
+  facade (`exterior_wall`), so their windows stay windows and their doors are exterior doors.
 * Plausibility rules (`classification/plausibility.py`): a window with no host wall is rejected (furniture or a
   shelf near a wall). A window in an interior or partition wall with no window symbol, name or layer is re-typed
-  as a `door` / `sliding_or_closet` and sent to review (wardrobe fronts drawn with thin parallel lines). A room
+  as a `door` / `sliding_or_closet` and sent to review (wardrobe fronts drawn with thin parallel lines). A window
+  *symbol* recognised by geometry only must lie inside its host wall band (`window.symbol_min_band_share`); one beside
+  the wall is furniture against it and is rejected. Only names / layers count as strong window evidence. A room
   with no door or opening gets a `no_access` validation warning.
+* Openings relate to the nearest room on each side, looking past a wall drawn as several parallel lines when the
+  first probe finds no room on that side.
 * Validation produces issues with entity id, source DXF entities (handle, layer, type, block), location, problem,
   suggested correction and confidence.
 

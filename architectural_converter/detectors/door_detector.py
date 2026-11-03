@@ -2,8 +2,10 @@
 
 Evidence: block role / name hints, quarter-circle swing arcs with plausible radius, a leaf
 line from the arc centre, layer hints. The *opening chord* is hinge -> closed-leaf point
-(the arc end that is not the leaf tip). When the leaf is missing both chords are kept and
-the host wall decides (the chord parallel to the wall wins).
+(the arc end that is not the leaf tip). The leaf is the radial line whose tip meets an arc end
+point best (door blocks also hold frame / threshold lines of radius length starting near the
+hinge). The other chord is always kept as an alternative: when the leaf is missing or
+ambiguous, or the symbol is drawn unusually, the gap in the host wall decides.
 
 Leaves from all sources (blocks and loose linework) are collected first; two leaves whose
 closed points meet and whose hinges are r1 + r2 apart form a double door - also when they
@@ -18,7 +20,7 @@ from shapely.geometry import MultiPoint, Polygon
 from ..geometry.geometric_utils import mrr_dims, robust_union
 from ..models.opening import Opening
 from .base_detector import BaseDetector, register
-from .symbol_analysis import LineTable, door_arcs, leaf_line_for
+from .symbol_analysis import LineTable, door_arcs, leaf_candidates
 
 
 def _sector(c, r, a0, a1):
@@ -75,14 +77,24 @@ class DoorDetector(BaseDetector):
             r = a.data["radius"]
             p_start = c + r * np.array([math.cos(a.data["start"]), math.sin(a.data["start"])])
             p_end = c + r * np.array([math.cos(a.data["end"]), math.sin(a.data["end"])])
-            leaf = leaf_line_for(a, lines, tol.snap, cfg["leaf_length_tol"])
-            if leaf is not None:
-                tip = leaf[1]
-                closed = p_end if np.hypot(*(tip - p_start)) < np.hypot(*(tip - p_end)) else p_start
-                chords = [(tuple(c), tuple(closed))]
+            cands = leaf_candidates(a, lines, tol.snap, cfg["leaf_length_tol"])
+            closed_of = {0: p_end, 1: p_start}           # the leaf tip is the OPEN position
+            leaf, leaf_known = None, False
+            if cands:
+                best = cands[0]
+                other = next((x for x in cands if x[1] != best[1]), None)
+                # a frame / threshold line can also run from the hinge to the other arc end; the
+                # leaf is the one whose tip meets the arc clearly better. Otherwise it is ambiguous
+                # and the host wall gap decides between the two chords.
+                amb = other is not None and other[0] <= max(2.0 * best[0], tol.snap)
+                leaf = (best[2], best[3])
+                leaf_known = not amb
+                closed = closed_of[best[1]]
+                opened = p_start if closed is p_end else p_end
+                chords = [(tuple(c), tuple(closed)), (tuple(c), tuple(opened))]
             else:
                 chords = [(tuple(c), tuple(p_end)), (tuple(c), tuple(p_start))]
-            res.append({"arc": a, "c": c, "r": r, "chords": chords, "leaf": leaf,
+            res.append({"arc": a, "c": c, "r": r, "chords": chords, "leaf": leaf, "leaf_known": leaf_known,
                         "sector": _sector(c, r, a.data["start"], a.data["end"])})
         return res
 
@@ -135,7 +147,9 @@ class DoorDetector(BaseDetector):
                 d = float(np.hypot(*(A["c"] - B["c"])))
                 if abs(d - (A["r"] + B["r"])) > max(4 * tol.snap, 0.05 * d) or d > cfg["double_max_width_m"]:
                     continue
-                if not any(math.dist(ca[1], cb[1]) <= max(4 * tol.snap, 0.04 * d) for ca in A["chords"] for cb in B["chords"]):
+                ch_a = A["chords"][:1] if A.get("leaf_known") else A["chords"]
+                ch_b = B["chords"][:1] if B.get("leaf_known") else B["chords"]
+                if not any(math.dist(ca[1], cb[1]) <= max(4 * tol.snap, 0.04 * d) for ca in ch_a for cb in ch_b):
                     continue
                 used |= {i, j}
                 o = Opening(id=ctx.ids.new("door"), type="door", subtype="double_swing", p0=tuple(A["c"]), p1=tuple(B["c"]),
@@ -152,7 +166,7 @@ class DoorDetector(BaseDetector):
             o = Opening(id=ctx.ids.new("door"), type="door", subtype="single_swing", p0=p0, p1=p1, width=A["r"],
                         hinge=tuple(A["c"]), alt_chords=A["chords"][1:],
                         swing={"leaves": 1, "radius": A["r"], "arc_start": A["arc"].data["start"],
-                               "arc_end": A["arc"].data["end"]})
+                               "arc_end": A["arc"].data["end"], "leaf_known": bool(A.get("leaf_known"))})
             o.footprint = A["sector"]
             self._evidence(o, [A], ctx)
             o.add_evidence("width_plausibility", 1.0 if 0.6 <= A["r"] <= 1.2 else 0.6)

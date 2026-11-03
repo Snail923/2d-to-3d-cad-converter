@@ -213,7 +213,8 @@ class ExtractionPipeline:
         st.logs["resolve"] = dict(st.ctx.stats.get("resolver", {}), manual_overrides=n,
                                   manual_walls=len(corr.get("added_walls", [])))
         # stair flights: their tread lines must not survive as wall candidates
-        from ..detectors.stair_detector import detect_stairs, veto_tread_walls
+        from ..detectors.stair_detector import (assemble_flights, detect_stairs, veto_stair_outline_walls,
+                                                veto_tread_walls)
         if "stair_detector" in self.cfg["runtime"].get("disabled_detectors", []):
             st.stairs, slog = [], {"skipped": "disabled"}
         else:
@@ -223,6 +224,10 @@ class ExtractionPipeline:
                 st.stairs, slog = detect_stairs(st.ctx, self.cfg, ids, st.ctx.labels)
                 apply_status_overrides(st.stairs, corr)
                 slog["walls_vetoed"] = veto_tread_walls(st.stairs, walls, self.cfg)
+                raw = st.drawing.raw_entities
+                slog["outline_walls_vetoed"] = veto_stair_outline_walls(
+                    st.stairs, walls, self.cfg, lambda r: raw[r].layer if r in raw else None, st.ctx.layer_score)
+                slog["assembly"] = assemble_flights(st.stairs, walls, self.cfg, st.ctx.tol)
             except Exception as e:  # noqa: BLE001  (an optional detector must never stop the pipeline)
                 st.stairs, slog = [], {"error": str(e)}
                 st.drawing.issues.append({"stage": "resolve", "severity": "warning",
@@ -309,7 +314,9 @@ class ExtractionPipeline:
         self._report("Step 7/10: floor levels")
         self._assign_levels(st, b, tol)
         from ..detectors.stair_detector import assign_rise
-        assign_rise(b.stairs.values(), {lv.id: lv for lv in b.levels}, self.cfg)
+        p2 = self.cfg["phase2"]
+        assign_rise(b.stairs.values(), {lv.id: lv for lv in b.levels}, self.cfg,
+                    p2["wall_height_m"] + p2["slab_thickness_m"])
         st.building = b
         st.solid = solid
         st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "wall_graph_components": _ncomp(G_walls),
@@ -371,13 +378,16 @@ class ExtractionPipeline:
         for h in b.hypotheses.values():
             h.classification = "hypothesis"
         from ..classification.access_solver import solve_access
+        from ..classification.balcony import detect_balconies
         from ..classification.plausibility import apply_plausibility
+        balc = detect_balconies(b, self.cfg, tol, st.drawing)
         from .corrections import apply_opening_type_overrides
         locked = apply_opening_type_overrides(list(b.openings.values()), st.corrections)
-        plaus = apply_plausibility(b, self.cfg, locked)
+        plaus = apply_plausibility(b, self.cfg, locked, tol)
         access = solve_access(b, self.cfg, locked)
         classify_openings(list(b.openings.values()), walls)
-        st.logs["classify"] = {"partition_threshold_m": limit, "plausibility": plaus, "access": access}
+        st.logs["classify"] = {"partition_threshold_m": limit, "balconies": balc, "plausibility": plaus,
+                               "access": access}
 
     def _stage_validate(self, st):
         b = st.building

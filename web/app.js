@@ -477,7 +477,7 @@ function draw2d(keepView) {
   for (const r of m.hypotheses.rooms) if (r.polygon) el("path", { class: "hyproom", d: polyD(r.polygon) }, gRooms);
   for (const r of m.rooms) {
     if (r.status === "REJECTED" || !r.polygon) continue;
-    el("path", { class: `el room st-${r.status}`, d: polyD(r.polygon), "data-id": r.id, "fill-rule": "evenodd" }, gRooms);
+    el("path", { class: `el room st-${r.status} cls-${r.classification || "none"}`, d: polyD(r.polygon), "data-id": r.id, "fill-rule": "evenodd" }, gRooms);
   }
   const gD = el("g", { class: "dxf" }, world);
   const spl = SPC.colour ? spLabels() : null;

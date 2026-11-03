@@ -30,6 +30,15 @@ class Stair(ArchitecturalEntity):
     stroke_ids: list[str] = field(default_factory=list)
     rise: float | None = None
     rise_source: str | None = None
+    direction_source: str | None = None              # text | arrow | assembly | landing_side
+    # multi-flight stairs: flights of one stair share an assembly id; ``flight_index`` is the
+    # walking order going up, ``base_height`` the height the flight starts at (0 for the first,
+    # the landing height for the next) and ``landing`` the landing reached at its top
+    assembly: str | None = None
+    assembly_kind: str | None = None                 # switchback | straight_with_landing
+    flight_index: int = 0
+    base_height: float = 0.0
+    landing: Polygon | None = None
 
     @property
     def treads(self) -> int:
@@ -42,6 +51,9 @@ class Stair(ArchitecturalEntity):
                   "treads": self.treads, "risers": self.treads + 1,
                   "tread_offsets": [round(x, 4) for x in self.tread_offsets],
                   "tread_span": [round(self.tread_span[0], 4), round(self.tread_span[1], 4)],
-                  "direction_known": self.direction_known,
+                  "direction_known": self.direction_known, "direction_source": self.direction_source,
+                  "assembly": self.assembly, "assembly_kind": self.assembly_kind,
+                  "flight_index": self.flight_index, "base_height": round(self.base_height, 4),
+                  "landing": coords_list(self.landing) if self.landing is not None else None,
                   "rise": round(self.rise, 4) if self.rise else None, "rise_source": self.rise_source})
         return d

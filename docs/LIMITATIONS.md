@@ -30,8 +30,13 @@
   wall-like pair. These candidates are typically NEEDS_REVIEW (see benchmark drawing 09).
 * Single-line walls get `thickness = null`. Phase 2 applies `unknown_wall_thickness_m`.
 
-* Stairs: straight flights only. Winders, spiral stairs and flights drawn as blocks without tread lines are not
-  detected. Landings are not modelled. Without an UP/DN marker the walking direction is unknown.
+* Stairs: straight flights, grouped into switchback or in-line assemblies with landings. Winders, spiral stairs,
+  L-shaped (quarter-turn) assemblies and flights drawn as blocks without tread lines are not detected / grouped.
+  Without an UP/DN text or arrow on any flight, the order of a switchback comes from its closed end (landing side)
+  and is flagged.
+* Balconies are recognised from lighter outline walls or balcony / railing layers. A balcony whose parapet is as
+  thick as the facade, on an unnamed layer and without a label, stays a room. A gap drawn in a railing line becomes
+  an unidentified opening for review.
 * Plausibility rules use the wall classification. A wardrobe front in an exterior wall (rare) stays a window.
   Thin furniture lines (shelves) can still pair into short thin "walls", which are usually low confidence.
 

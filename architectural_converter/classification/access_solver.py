@@ -24,7 +24,7 @@ import networkx as nx
 from ..models.base_entity import Status
 
 OUTSIDE = "__outside__"
-STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match")
+STRONG_WINDOW_EVIDENCE = ("name_hint", "layer_match")   # names / layers, not geometry-only symbols
 
 
 def _live(e):
@@ -114,9 +114,10 @@ def solve_access(b, cfg, locked=frozenset()) -> dict:
                 if not _live(o) or o.type != "window" or o.id in locked or o.manual_status is not None:
                     continue
                 others = [x for x in o.rooms if x != r.id and x in G]
-                host = b.walls.get(o.host_wall)
-                if not others or (host is not None and host.classification == "exterior_wall"):
+                if not others:
                     continue          # a window to the outside never explains a missing door
+                # (a window between two rooms may sit in an exterior wall: the facade towards a
+                # balcony or terrace, where a French window is the usual access)
                 cands.append(o)
             if not cands:
                 continue
