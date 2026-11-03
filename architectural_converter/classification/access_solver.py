@@ -15,7 +15,7 @@ a door symbol on an unexpected layer). The solver therefore:
 
 The choice is ranked deterministically: no window symbol / layer evidence first, then a
 door-like width, then the weakest window confidence. Re-typed openings stay traceable (notes,
-``status_reason``) and NEEDS_REVIEW so that the automatic verifier checks them. Rooms that
+``status_reason``) and NEEDS_REVIEW for review. Rooms that
 still have no access are reported by validation."""
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import networkx as nx
 from ..models.base_entity import Status
 
 OUTSIDE = "__outside__"
-STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match", "learned_label")
+STRONG_WINDOW_EVIDENCE = ("symbol", "name_hint", "layer_match")
 
 
 def _live(e):

@@ -51,10 +51,6 @@ self.onmessage = async (ev) => {
                               args.config ? JSON.stringify(args.config) : null);
     } else if (cmd === "rerun") {
       result = bridge.rerun(JSON.stringify(args.corrections));
-    } else if (cmd === "sympoint_request") {
-      result = bridge.sympoint_request();
-    } else if (cmd === "apply_sympoint") {
-      result = bridge.apply_sympoint(args.response);
     } else if (cmd === "export_json") {
       result = bridge.export_model_json();
     } else if (cmd === "export_sqlite") {

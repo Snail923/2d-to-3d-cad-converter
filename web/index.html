@@ -89,38 +89,6 @@
       <summary>Selection</summary>
       <div id="details" class="details"><span class="muted">Click a wall, opening, room, column or hypothesis.</span></div>
     </details>
-    <details open id="spPanel">
-      <summary>SymPointV2 symbol detector <span id="spBadge" class="badge">off</span></summary>
-      <div class="corr">
-        <p class="small muted">A learned symbol detector (doors, windows, wardrobes, furniture, stairs, walls) running on <b>your GPU</b>
-          (see <code>tools/sympoint_service</code>). Its labels are added as evidence to every element; they never create geometry.</p>
-        <label class="small"><input type="checkbox" id="spEnabled"> run after every drawing is loaded</label>
-        <div class="aigrid small"><label>address <input id="spEndpoint" type="text" spellcheck="false"></label></div>
-        <div class="row"><button id="spTest" class="btn small">Test connection</button>
-          <button id="spRun" class="btn small">Run SymPointV2 now</button></div>
-        <div id="spStatus" class="small"></div>
-      </div>
-    </details>
-    <details open id="aiPanel">
-      <summary>Automatic AI verification <span id="aiBadge" class="badge">off</span></summary>
-      <div class="corr">
-        <p class="small muted">A vision model running on <b>this computer</b> checks the engine's doubtful decisions on a crop of
-          the drawing and its answers are applied automatically (then the drawing is re-run). Nothing is sent to the internet.</p>
-        <label class="small"><input type="checkbox" id="aiEnabled"> verify automatically after every run</label>
-        <div class="aigrid small">
-          <label>server <select id="aiApi"><option value="lmstudio">LM Studio</option><option value="ollama">Ollama</option><option value="openai">other OpenAI-compatible (llama.cpp, vLLM)</option></select></label>
-          <label>address <input id="aiEndpoint" type="text" spellcheck="false"></label>
-          <label>model <input id="aiModel" type="text" spellcheck="false" list="aiModels" placeholder="press Find models"><datalist id="aiModels"></datalist></label>
-          <label>apply when confidence ≥ <input id="aiMin" type="number" min="0" max="1" step="0.05"></label>
-        </div>
-        <div class="row"><button id="aiFind" class="btn small">Find models</button><button id="aiTest" class="btn small">Test connection</button>
-          <button id="aiRun" class="btn small">Verify now</button>
-          <button id="aiStop" class="btn small" style="display:none">Stop</button>
-          <button id="aiUndo" class="btn small">Remove AI decisions</button></div>
-        <div id="aiStatus" class="small"></div>
-        <div id="aiLog" class="small"></div>
-      </div>
-    </details>
     <details open>
       <summary>Manual corrections <span id="corrCount" class="badge">0</span></summary>
       <div class="corr">

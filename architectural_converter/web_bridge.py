@@ -61,29 +61,6 @@ def rerun(corrections_json: str) -> str:
     return _payload(st, cfg)
 
 
-def sympoint_request() -> str:
-    """SymPointV2 input for the loaded drawing (tiles of primitives + DXF ids)."""
-    from .learned import export_tiles
-    req = export_tiles(_S["st"].drawing, _S["cfg"])
-    _S["sympoint_request"] = req
-    return json.dumps(req, separators=(",", ":"))
-
-
-def apply_sympoint(response_json: str) -> str:
-    """Fuse SymPointV2 predictions into the model (re-run from resolution with the labels)."""
-    from .learned import labels_from_response
-    pipe, st, cfg = _S["pipe"], _S["st"], _S["cfg"]
-    req = _S.get("sympoint_request")
-    if req is None:
-        sympoint_request()
-        req = _S["sympoint_request"]
-    labels = labels_from_response(req, json.loads(response_json))
-    _progress(f"Fusing {len(labels['entities']):,} labelled DXF entities from {labels['model']}")
-    st = pipe.rerun(st, symbol_labels=labels)
-    _S["st"] = st
-    return _payload(st, cfg)
-
-
 def export_model_json() -> str:
     return json.dumps(_S["st"].model, default=_jsonable, indent=1)
 

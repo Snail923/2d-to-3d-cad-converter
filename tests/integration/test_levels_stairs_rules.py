@@ -91,7 +91,7 @@ def _bedroom_door_as_window_block():
     return p
 
 
-def test_unreachable_room_gets_its_door_and_is_queued_for_verification():
+def test_unreachable_room_gets_its_door():
     pipe = ExtractionPipeline(PipelineConfig())
     st = pipe.process(_bedroom_door_as_window_block())
     acc = st.logs["classify"]["access"]
@@ -102,15 +102,9 @@ def test_unreachable_room_gets_its_door_and_is_queued_for_verification():
     assert not [i for i in st.report.issues if i.code == "no_access"]
     windows = [x for x in st.building.openings.values() if x.type == "window" and x.status != Status.REJECTED]
     assert len(windows) == 2 and all(x.classification == "exterior_window" for x in windows)
-    q = st.model["verification"]["queue"]
-    assert q[0]["id"] == oid and q[0]["claim"] == "door" and "BEDROOM" in " ".join(q[0]["context"]["rooms_on_sides"])
-    # an automatic (AI) decision is applied like a correction, recorded with its provenance and locks the item
-    corr = {"status_overrides": {oid: "ACCEPTED"}, "opening_type_overrides": {oid: "sliding_or_closet"},
-            "provenance": {oid: {"by": "ai", "model": "test-model", "verdict": "sliding_or_closet_door",
-                                 "confidence": 0.9, "reason": "wardrobe"}}}
+    # a manual correction re-types the opening and locks it against the automatic rules
+    corr = {"status_overrides": {oid: "ACCEPTED"}, "opening_type_overrides": {oid: "sliding_or_closet"}}
     st2 = pipe.rerun(st, corr)
     o2 = st2.building.openings[oid]
     assert o2.type == "door" and o2.subtype == "sliding_or_closet" and o2.status == Status.ACCEPTED
-    assert o2.status_reason.startswith("AI verification (test-model")
-    assert oid not in [x["id"] for x in st2.model["verification"]["queue"]]
-    assert st2.model["verification"]["decisions"][oid]["by"] == "ai"
+    assert o2.status_reason == "manual correction"

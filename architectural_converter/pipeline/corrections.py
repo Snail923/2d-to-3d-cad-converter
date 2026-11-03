@@ -7,14 +7,8 @@ Format (JSON, model coordinates in metres)::
       "status_overrides": {"wall_0012": "REJECTED", "door_0003": "ACCEPTED", "room_0004": "ACCEPTED"},
       "added_walls": [{"start": [x, y], "end": [x, y], "thickness": 0.15, "note": "..."}],
       "room_overrides": [{"polygon": [[x, y], ...], "name": "Kitchen"}],
-      "opening_type_overrides": {"opening_0002": "door", "window_0004": "sliding_or_closet"},
-      "provenance": {"window_0004": {"by": "ai", "model": "qwen2.5vl:7b", "verdict": "sliding_or_closet_door",
-                                     "confidence": 0.86, "reason": "..."}}
+      "opening_type_overrides": {"opening_0002": "door", "window_0004": "sliding_or_closet"}
     }
-
-``provenance`` says who made a decision: missing / ``{"by": "user"}`` for manual corrections,
-``{"by": "ai", ...}`` for the automatic verifier (a local vision model). Both are applied the same
-way; the source is kept in the entity's notes and ``status_reason``.
 
 ``added_walls`` also covers "connect endpoints" and accepted missing-wall hypotheses.
 Corrections never modify RawEntity / GeoEntity data."""
@@ -31,17 +25,10 @@ from ..models.base_entity import Status
 from ..models.room import Room
 from ..models.wall import Wall
 
-EMPTY = {"version": 1, "status_overrides": {}, "added_walls": [], "room_overrides": [], "opening_type_overrides": {}, "provenance": {}}
+EMPTY = {"version": 1, "status_overrides": {}, "added_walls": [], "room_overrides": [], "opening_type_overrides": {}}
 
 OPENING_TYPES = {"door": ("door", None), "window": ("window", None), "opening": ("opening", "passage"),
                  "sliding_or_closet": ("door", "sliding_or_closet")}
-
-
-def decided_by(corrections, eid) -> str:
-    p = corrections.get("provenance", {}).get(eid) or {}
-    if p.get("by") == "ai":
-        return f"AI verification ({p.get('model', 'local model')}, {float(p.get('confidence', 0)):.2f}): {p.get('reason', '')}".strip()
-    return "manual correction"
 
 
 def normalize_corrections(c: dict | str | None) -> dict[str, Any]:
@@ -64,7 +51,7 @@ def apply_status_overrides(entities, corrections) -> int:
         if st:
             e.manual_status = Status(st)
             e.status = Status(st)
-            e.status_reason = decided_by(corrections, e.id)
+            e.status_reason = "manual correction"
             e.add_evidence("manual", 1.0 if st == "ACCEPTED" else 0.0)
             n += 1
     return n
@@ -124,6 +111,6 @@ def apply_opening_type_overrides(openings, corrections) -> set[str]:
         o.subtype = sub or ("verified" if o.subtype in ("sliding_or_closet", "access_inferred", "unidentified") else o.subtype)
         if typ != "window":
             o.sill_height = None
-        o.notes.append(f"type set to {t} by {decided_by(corrections, o.id)}")
+        o.notes.append(f"type set to {t} by manual correction")
         locked.add(o.id)
     return locked
