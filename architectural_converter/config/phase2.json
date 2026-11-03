@@ -8,5 +8,9 @@
   "slab_thickness_m": 0.15,
   "column_height_m": 2.8,
   "unknown_wall_thickness_m": 0.12,
-  "export_statuses": ["ACCEPTED", "NEEDS_REVIEW"]
+  "export_statuses": [
+    "ACCEPTED",
+    "NEEDS_REVIEW"
+  ],
+  "railing_height_m": 1.1
 }

@@ -87,6 +87,8 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 #svg .wall.cls-exterior_wall { fill: #1d4f91; stroke: #1d4f91; }
 #svg .wall.cls-interior_wall { fill: #2f7d32; stroke: #2f7d32; }
 #svg .wall.cls-partition_wall { fill: #7cb342; stroke: #5f8f30; }
+#svg .wall.cls-railing { fill: #00897b; stroke: #00897b; stroke-dasharray: 4 2; }
+#svg .room.cls-balcony { fill: #b2dfdb; stroke: #00897b; }
 #svg .wall.st-NEEDS_REVIEW { fill: #f2a33a; stroke: #e08a00; stroke-dasharray: 5 3; fill-opacity: .45; }
 #svg .wall.st-REJECTED { fill: #d32f2f; stroke: #d32f2f; fill-opacity: .12; stroke-opacity: .5; stroke-dasharray: 2 3; }
 #svg .axis { stroke: #1d2330; stroke-opacity: .35; stroke-width: 0.8; fill: none; vector-effect: non-scaling-stroke; pointer-events: none; }
@@ -113,7 +115,7 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 #svg .roomlabel { fill: #8a6d00; font-family: sans-serif; text-anchor: middle; pointer-events: none; }
 #svg .selected { stroke: #ff1f6b !important; stroke-width: 3 !important; fill-opacity: .7 !important; }
 #svg.hide-dxf .dxf, #svg.hide-hatch .hatch, #svg.hide-dxftext .dxftexts, #svg.hide-rooms .rooms, #svg.hide-roomlabels .roomlabels,
-#svg.hide-exterior .cls-exterior_wall, #svg.hide-interior .cls-interior_wall, #svg.hide-partition .cls-partition_wall,
+#svg.hide-exterior .cls-exterior_wall, #svg.hide-exterior .cls-railing, #svg.hide-interior .cls-interior_wall, #svg.hide-partition .cls-partition_wall,
 #svg.hide-review .wall.st-NEEDS_REVIEW, #svg.hide-rejected .st-REJECTED, #svg.hide-doors .t-door, #svg.hide-windows .t-window,
 #svg.hide-openings .t-opening, #svg.hide-columns .columns, #svg.hide-stairs .stairs, #svg.hide-hyps .hyps, #svg.hide-issues .issues, #svg.hide-axes .axes { display: none; }
 

@@ -137,7 +137,26 @@
         "tree",
         "car",
         "seat",
-        "seating"
+        "seating",
+        "wc",
+        "bath",
+        "bidet",
+        "urinal",
+        "lavabo",
+        "vanity",
+        "kitchen",
+        "kitch",
+        "counter",
+        "worktop",
+        "pillow",
+        "cushion",
+        "tv",
+        "television",
+        "closet",
+        "shelf",
+        "shelves",
+        "rug",
+        "carpet"
       ],
       "medium": [
         "eqpm",
@@ -246,6 +265,34 @@
         "xref"
       ],
       "medium": []
+    },
+    "balcony": {
+      "strong": [
+        "balcony",
+        "balconies",
+        "balcon",
+        "balkon",
+        "balcone",
+        "terrace",
+        "terrasse",
+        "terraza",
+        "terrazza",
+        "loggia",
+        "veranda",
+        "railing",
+        "railings",
+        "handrail",
+        "balustrade",
+        "parapet",
+        "guardrail",
+        "garde",
+        "gelander"
+      ],
+      "medium": [
+        "balc",
+        "rail",
+        "terr"
+      ]
     }
   },
   "wall_evidence": {
@@ -261,6 +308,16 @@
     "stair": 0.15,
     "area": 0.2,
     "ignore": 0.0,
-    "_unknown": 0.5
+    "_unknown": 0.5,
+    "balcony": 0.35
+  },
+  "non_building_categories": {
+    "_doc": "Linework on layers whose primary category is listed here is never used as building linework (wall faces, glazing, treads). Content of INSERTs is handled by symbol roles instead.",
+    "categories": [
+      "dimension",
+      "annotation",
+      "ignore",
+      "furniture"
+    ]
   }
 }

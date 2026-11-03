@@ -15,6 +15,7 @@ from .mesh_utils import box, extrude
 
 COLORS = {"exterior_wall": [0.80, 0.78, 0.74, 1.0], "interior_wall": [0.92, 0.90, 0.86, 1.0],
           "partition_wall": [0.95, 0.95, 0.93, 1.0], "wall": [0.88, 0.86, 0.82, 1.0],
+          "railing": [0.55, 0.60, 0.66, 1.0], "balcony": [0.66, 0.70, 0.72, 1.0],
           "column": [0.62, 0.60, 0.58, 1.0], "floor": [0.76, 0.66, 0.52, 1.0],
           "stair": [0.70, 0.55, 0.42, 1.0], "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
 
@@ -81,7 +82,11 @@ def build_3d(model: dict, cfg) -> Model3D:
         return lv.get("height") if lv else None
     for w in view["walls"]:
         g = w["geometry"]
-        H = w.get("height") or level_height(w) or out.default("wall_height_m", p2["wall_height_m"], w["id"])
+        if w.get("classification") == "railing" and not w.get("height"):
+            # balcony railing / parapet: an outdoor edge, not a storey-high wall
+            H = out.default("railing_height_m", p2.get("railing_height_m", 1.1), w["id"])
+        else:
+            H = w.get("height") or level_height(w) or out.default("wall_height_m", p2["wall_height_m"], w["id"])
         t = w.get("thickness") or out.default("unknown_wall_thickness_m", p2["unknown_wall_thickness_m"], w["id"])
         color = COLORS.get(w.get("classification") or "wall", COLORS["wall"])
         if w["status"] == "NEEDS_REVIEW":
@@ -144,7 +149,8 @@ def build_3d(model: dict, cfg) -> Model3D:
     for r in view["rooms"]:
         if r.get("polygon"):
             V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
-            out.add(r["id"], "floor", r.get("classification"), V, F, COLORS["floor"])
+            out.add(r["id"], "floor", r.get("classification"), V, F,
+                    COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
     if stacked:
         level_of = {e["id"]: e.get("level") for k in ("walls", "openings", "rooms", "columns", "stairs")
                     for e in view.get(k, [])}
@@ -167,13 +173,18 @@ def _stair_mesh(out, sf):
     r = np.array(sf["run"], float)
     w0, w1 = sf["tread_span"]
     rise = sf.get("rise") or 0.175
+    z0 = sf.get("base_height") or 0.0              # next flights of a stair start at their landing
     offs = sf["tread_offsets"]
     prev = -sf["going"]
     parts = []
     for k, y in enumerate(offs):
         ring = [tuple(o + u * x + r * yy) for x, yy in ((w0, prev), (w1, prev), (w1, y), (w0, y))]
-        parts.append(extrude(ring, 0.0, (k + 1) * rise))
+        parts.append(extrude(ring, max(0.0, z0 - 0.15), z0 + (k + 1) * rise))
         prev = y
+    land = sf.get("landing")
+    if land and land.get("exterior"):
+        zl = z0 + (len(offs) + 1) * rise           # top of this flight = the landing
+        parts.append(extrude(land["exterior"], zl - 0.15, zl))
     V, F = _merge(parts)
     out.add(sf["id"], "stair", "stair", V, F, COLORS["stair"])
 

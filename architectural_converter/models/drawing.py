@@ -66,6 +66,7 @@ class BlockReference:
     child_geo_ids: list[str] = field(default_factory=list)   # all descendant GeoEntities
     role: str = "unknown"
     role_scores: dict[str, float] = field(default_factory=dict)
+    semantic_scores: dict[str, float] = field(default_factory=dict)   # name / layer part only
     signature: dict[str, Any] = field(default_factory=dict)
 
 

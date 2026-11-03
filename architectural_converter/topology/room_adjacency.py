@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import networkx as nx
+from shapely.geometry import LineString
 from shapely.strtree import STRtree
 
 from ..geometry.geometric_utils import rect_polygon, robust_intersection, sample_points, bbox_pad
@@ -40,13 +41,36 @@ def relate_rooms(rooms, walls, openings, tol) -> nx.Graph:
                 else:
                     G.add_edge(a, b, walls=[w.id], openings=[])
     wmap = {w.id: w for w in walls}
+    # an opening may sit in one line of a wall drawn as several parallel candidates (facade +
+    # render line, double partition): when the probe across the host wall finds no room on one
+    # side, look past the whole wall stack on that side and take the nearest room there
+    max_t = max([w.thickness or 0.0 for w in walls] + [tol.snap * 2])
     for o in openings:
         if o.host_wall not in wmap or not o.host_interval:
             continue
         w = wmap[o.host_wall]
-        span = rect_polygon(w.u, w.c, o.host_interval[0], o.host_interval[1],
-                            (w.thickness or tol.snap * 2) + tol.snap * 8)
+        t = w.thickness or tol.snap * 2
+        a, b = o.host_interval
+        span = rect_polygon(w.u, w.c, a, b, t + tol.snap * 8)
         hit = [rooms[int(k)] for k in tree.query(span) if rooms[int(k)].polygon.intersects(span)]
+        axis = LineString([w.point_at(a), w.point_at(b)])
+        for sgn in (1.0, -1.0):
+            near = rect_polygon(w.u, w.c + sgn * (t / 2 + tol.snap * 2), a, b, tol.snap * 4)
+            if any(r.polygon.intersects(near) for r in hit):
+                continue
+            reach = t / 2 + 2 * max_t + tol.snap * 4
+            side = rect_polygon(w.u, w.c + sgn * reach / 2, a, b, reach)
+            best = None
+            for k in tree.query(side):
+                r = rooms[int(k)]
+                part = robust_intersection(r.polygon, side)
+                if part.is_empty or part.area <= 0:
+                    continue
+                d = part.distance(axis)
+                if best is None or d < best[0]:
+                    best = (d, r)
+            if best is not None and best[1] not in hit:
+                hit.append(best[1])
         o.rooms = [r.id for r in hit]
         for r in hit:
             r.openings.add(o.id)
