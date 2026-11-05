@@ -1,0 +1,75 @@
+"""Approach 2 pipeline: approach 1's stages with only the extraction replaced.
+
+    ingest -> preprocess -> context            (approach 1's front end: DXF, units, strokes, texts)
+    detect  = SymPointV2 labels -> candidates  (extract.py; no approach-1 detector runs)
+    resolve = candidates + manual corrections  (no approach-1 candidate resolver / vetoes)
+    reconstruct -> topology -> classify -> validate -> export   (approach 1, unchanged)
+
+The result is a normal ``PipelineState`` / archmodel, so approach 1's exporters, overlay, report,
+3D builder and benchmark metrics work on it as they are."""
+from __future__ import annotations
+
+import copy
+import time
+
+from architectural_converter.pipeline.corrections import apply_status_overrides, manual_walls
+from architectural_converter.pipeline.extraction_pipeline import STAGES, ExtractionPipeline
+from architectural_converter.pipeline.pipeline_config import PipelineConfig
+
+from . import load_config
+from .extract import extract
+from .labels import get_labels
+
+
+class SymPointPipeline(ExtractionPipeline):
+    STAGE_LABELS = dict(ExtractionPipeline.STAGE_LABELS,
+                        detect="SymPointV2 labels -> walls, doors, windows, columns, stairs",
+                        resolve="Applying manual corrections")
+
+    def __init__(self, sp_config: dict | None = None, engine_overrides: dict | None = None, progress=None,
+                 url: str | None = None, response: dict | None = None, labels_progress=print):
+        self.sp = sp_config or load_config()
+        ov = copy.deepcopy(self.sp.get("engine_overrides", {}))
+        ov.pop("_doc", None)
+        for k, v in (engine_overrides or {}).items():
+            ov[k] = v
+        super().__init__(PipelineConfig(ov), progress)
+        self.url, self.response, self.labels_progress = url, response, labels_progress
+
+    def _stage_detect(self, st):
+        t0 = time.perf_counter()
+        labels, prims, req, resp, source = get_labels(st.drawing, st.input_file, self.sp, self.url, self.response,
+                                                      progress=self.labels_progress)
+        st.timings["detect:sympoint_labels"] = round(time.perf_counter() - t0, 4)
+        st.sp_labels, st.sp_prims, st.sp_request, st.sp_response = labels, prims, req, resp
+        t0 = time.perf_counter()
+        cands, log = extract(st.drawing, st.ctx, prims, labels, self.sp, st.ctx.ids)
+        st.timings["detect:sympoint_extract"] = round(time.perf_counter() - t0, 4)
+        st.ctx.candidates = cands
+        st.detected = copy.deepcopy(cands)
+        st.ids_after_detect = copy.deepcopy(st.ctx.ids)
+        st.logs["detect"] = {"approach": "sympoint", "labels_source": source, "tiles": len(req["tiles"]),
+                             "primitives": len(prims), "labelled_entities": len(labels["entities"]),
+                             "model_seconds": resp.get("seconds"), **log}
+
+    def _stage_resolve(self, st):
+        c = st.ctx.candidates
+        walls = list(c.get("sympoint_walls", []))
+        doors = list(c.get("sympoint_doors", []))
+        windows = list(c.get("sympoint_windows", []))
+        columns = list(c.get("sympoint_columns", []))
+        stairs = list(c.get("sympoint_stairs", []))
+        wt = self.cfg["detection"]["weights"]
+        th = self.cfg["detection"]["status_thresholds"]
+        for coll, key in ((walls, "wall"), (doors, "door"), (windows, "window"), (columns, "column"), (stairs, "stair")):
+            for e in coll:
+                e.score({**wt[key], "manual": 10.0}, th)
+        corr = st.corrections
+        n = apply_status_overrides(walls + doors + windows + columns + stairs, corr)
+        walls += manual_walls(corr, st.ctx.ids)
+        st.walls, st.doors, st.windows, st.columns, st.stairs = walls, doors, windows, columns, stairs
+        st.logs["resolve"] = {"manual_overrides": n, "manual_walls": len(corr.get("added_walls", []))}
+        st.logs["stairs"] = {"flights": len(stairs), "source": "sympoint"}
+
+
+__all__ = ["SymPointPipeline", "STAGES"]

@@ -21,7 +21,7 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 | | package | extraction | status |
 |---|---|---|---|
 | **Approach 1** | `architectural_converter/` | geometry, graph topology and rules only (this README) | complete |
-| **Approach 2** | `sympoint_converter/` | the learned model [SymPointV2](https://github.com/nicehuster/SymPointV2) labels every DXF line (wall, door types, window, stairs, furniture, ...) | step 1: run the model and inspect its raw labels; next: build the model from the labels with approach 1's reconstruction, topology, validation, export and 3D, then compare |
+| **Approach 2** | `sympoint_converter/` | the learned model [SymPointV2](https://github.com/nicehuster/SymPointV2) labels every DXF line (wall, door types, window, curtain wall, stairs, furniture, ...); walls, doors, windows, columns and stairs are built from the labels, then approach 1's reconstruction, rooms, classification, validation, export and 3D run unchanged | complete; `python -m sympoint_converter compare <dxf>` runs both side by side (the GPU service starts by itself) |
 
 Approach 2 reuses only approach 1's DXF reading and unit normalisation; approach 1 never imports approach 2.
 Setup (local NVIDIA GPU, no change to the system CUDA) and usage: [sympoint_converter/README.md](sympoint_converter/README.md).

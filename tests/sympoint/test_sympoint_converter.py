@@ -34,6 +34,12 @@ def _plan():
     return p
 
 
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    """Labels cache, pid and log files of the tests never touch ~/.cache."""
+    monkeypatch.setenv("SYMPOINT_STATE_DIR", str(tmp_path / "state"))
+
+
 @pytest.fixture(scope="module")
 def drawing_path():
     return _plan()
@@ -158,7 +164,7 @@ def test_cli_end_to_end(drawing_path, fake_service, tmp_path):
     assert all(e["handle"] and e["label"] == LAYER_CLASS[e["layer"]] for e in lab["entities"].values())
     # offline round trip: request file, then the saved answer gives the same labels
     off = tmp_path / "off"
-    assert main(["label", drawing_path, "-o", str(off), "--tile-m", "30"]) == 0
+    assert main(["label", drawing_path, "-o", str(off), "--tile-m", "30", "--offline"]) == 0
     req = json.loads((off / "sp.sympoint.request.json").read_text())
     (off / "resp.json").write_text(json.dumps(fake_answer(req)))
     assert main(["label", drawing_path, "-o", str(off), "--tile-m", "30", "--response", str(off / "resp.json")]) == 0

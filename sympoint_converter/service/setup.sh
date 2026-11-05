@@ -55,5 +55,6 @@ python -c "import torch, pointops_cuda; print('pointops OK on', torch.cuda.get_d
 
 cp "$HERE/server.py" "$DIR/sympoint_server.py"
 echo
-echo "Done. Put the weights (best.pth) and the .yaml that came with them in $DIR, then:"
-echo "  cd $DIR && conda activate $ENV && python sympoint_server.py --config svg_pointT_release.yaml --checkpoint weights.pth"
+echo "Done. Put the weights and the .yaml that came with them in $DIR as weights.pth and svg_pointT_release.yaml."
+echo "Then, from the converter (normal Python env), the service starts by itself, e.g.:"
+echo "  python -m sympoint_converter compare samples/real/apartment-building-plan.dxf -o out/"

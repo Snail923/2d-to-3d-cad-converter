@@ -1,6 +1,6 @@
 {
   "_doc": "SymPointV2 approach (approach 2). Lengths in metres of the normalised drawing.",
-  "tile_m": 30.0,
+  "tile_m": 20.0,
   "overlap_m": 4.0,
   "max_primitives_per_tile": 40000,
   "min_primitive_length_m": 0.0001,
@@ -8,5 +8,54 @@
   "min_label_score": 0.35,
   "min_label_mass": 0.2,
   "request_tiles_per_call": 8,
-  "timeout_s": 1800
+  "timeout_s": 1800,
+  "cache_labels": true,
+  "service": {
+    "_doc": "Local SymPointV2 service. 'home' = SymPointV2 checkout (SYMPOINT_HOME overrides), 'env' = its conda env. The CLI starts the service in the background when it is not running and keeps sympoint_server.py up to date. 'python' = explicit interpreter instead of the conda env (optional).",
+    "url": "http://127.0.0.1:8790",
+    "home": "~/sympointv2",
+    "env": "sympoint",
+    "python": null,
+    "config": ["svg_pointT_release.yaml", "configs/svg/svg_pointT.yaml"],
+    "checkpoint": ["weights.pth", "best.pth"],
+    "autostart": true,
+    "start_timeout_s": 240,
+    "sync_server": true
+  },
+  "build": {
+    "_doc": "Turning labels into walls / openings / columns / stairs (see extract.py).",
+    "min_wall_share": 0.5,
+    "min_face_length_m": 0.05,
+    "wall_thickness_m": [0.04, 0.9],
+    "plausible_thickness_m": [0.07, 0.6],
+    "parallel_deg": 1.0,
+    "min_overlap_m": 0.05,
+    "column_size_m": [0.15, 1.5],
+    "short_piece_factor": 1.0,
+    "single_line_max_paired_share": 0.3,
+    "single_line_min_length_m": 0.3,
+    "nominal_thickness_m": 0.15,
+    "symbol_cluster_gap_m": 0.08,
+    "min_instance_score": 0.5,
+    "host_search_m": 0.6,
+    "unhosted_doors": false,
+    "door_width_m": [0.45, 3.6],
+    "window_width_m": [0.3, 8.0],
+    "stair_cluster_gap_m": 0.4,
+    "min_tread_m": 0.5,
+    "min_treads": 3,
+    "going_m": [0.15, 0.5]
+  },
+  "engine_overrides": {
+    "_doc": "Merged into approach 1's configuration for the shared build stages: weights of the evidence approach 2 produces (approach 1's own config files are not changed).",
+    "detection": {
+      "weights": {
+        "wall": {"sympoint_label": 2.5, "sympoint_faces": 1.0, "sympoint_thickness": 0.6},
+        "door": {"sympoint_label": 3.0},
+        "window": {"sympoint_label": 3.0},
+        "column": {"sympoint_label": 2.0},
+        "stair": {"sympoint_label": 2.0, "sympoint_regularity": 1.0}
+      }
+    }
+  }
 }
