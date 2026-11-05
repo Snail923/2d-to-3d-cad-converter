@@ -78,7 +78,7 @@ from svgnet.util import get_root_logger, load_checkpoint  # noqa: E402
 def _check_weights(checkpoint, model):
     """load_checkpoint is non-strict: a wrong config / checkpoint pair would load silently and give
     random labels. Count what really matches and stop if most of the model stays uninitialised."""
-    sd = torch.load(checkpoint, map_location="cpu")
+    sd = torch.load(checkpoint, map_location="cpu", weights_only=False)
     src = sd.get("net", sd) if isinstance(sd, dict) else {}
     tgt = model.state_dict()
     ok = sum(1 for k, v in src.items() if k in tgt and tuple(v.shape) == tuple(tgt[k].shape))
@@ -96,7 +96,9 @@ class Runner:
             raise SystemExit("PyTorch does not see a CUDA GPU (torch.cuda.is_available() is False).")
         cfg = Munch.fromDict(yaml.safe_load(open(config)))
         self.cfg = cfg
-        self.model = SVGNet(cfg.model).cuda().eval()
+        # SVGNet.train() does not return self, so .eval() would return None: call it separately
+        self.model = SVGNet(cfg.model).cuda()
+        self.model.eval()
         self.loaded = _check_weights(checkpoint, self.model)
         load_checkpoint(checkpoint, get_root_logger(), self.model)
         self.lock = threading.Lock()
