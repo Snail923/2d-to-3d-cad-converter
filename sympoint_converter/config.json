@@ -1,0 +1,11 @@
+{
+  "_doc": "SymPointV2 approach (approach 2). Lengths in metres of the normalised drawing.",
+  "tile_m": 30.0,
+  "overlap_m": 4.0,
+  "max_primitives_per_tile": 40000,
+  "min_primitive_length_m": 0.0001,
+  "include_hatch_boundaries": false,
+  "min_label_score": 0.35,
+  "request_tiles_per_call": 8,
+  "timeout_s": 1800
+}
