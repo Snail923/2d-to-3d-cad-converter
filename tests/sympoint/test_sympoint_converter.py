@@ -177,3 +177,23 @@ def test_approach_1_does_not_depend_on_approach_2():
         for f in fs:
             if f.endswith(".py"):
                 assert "sympoint_converter" not in open(os.path.join(dp, f), encoding="utf-8").read(), f
+
+
+def test_share_and_mass_answers(drawing):
+    """Current service: [class, share 0-1, mass]. Lines the model barely covers (low mass) are
+    unlabelled; old raw summed scores (> 1) are clamped."""
+    cfg = load_config()
+    req = export_tiles(drawing, cfg)
+    ans = fake_answer(req)
+    for t in ans["tiles"]:
+        t["semantic"] = [[c, s, 1.2 if s > 0.5 else 0.05] for c, s in t["semantic"]]
+        t["semantic"][0][1] = 0.95
+    lab = labels_from_response(req, ans, cfg["min_label_score"], cfg["min_label_mass"])
+    assert lab["entities"] and all(e["score"] <= 1 for e in lab["entities"].values())
+    raw = drawing.raw_entities
+    assert all(raw[rid].layer in LAYER_CLASS for rid in lab["entities"])
+    old = fake_answer(req)
+    for t in old["tiles"]:
+        t["semantic"] = [[c, 1.4] for c, _ in t["semantic"]]
+    lab_old = labels_from_response(req, old, cfg["min_label_score"])
+    assert all(e["score"] == 1.0 for e in lab_old["entities"].values())

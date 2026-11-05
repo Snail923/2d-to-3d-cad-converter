@@ -92,7 +92,12 @@ python -m sympoint_converter label samples/real/apartment-building-plan.dxf --ur
 
 * **Walls:** are the wall face lines brown (wall) and continuous? Are door leaves, window glazing or furniture
   wrongly brown?
-* **Doors vs windows:** pink / purple shades are doors, blue are windows. Check sliding doors and wardrobe fronts.
+* **Doors vs windows:** pink shades are doors, blue are windows, violet is *curtain wall* (glazed facade). On
+  `apartment-building-plan.dxf` almost all window lines come out as curtain wall, so curtain wall is reported as
+  its own group. Check sliding doors and wardrobe fronts too.
+* **Scores** are the share of the chosen class in the model's answer for that line (0-1). SymPointV2's raw
+  scores are sums over its queries and can exceed 1; lines the model barely covers (`min_label_mass`) count as
+  "no label".
 * **Layers × groups table:** a wall layer should be almost all wall; a door layer almost all door. This is the
   quickest way to spot a systematic error.
 * **Scores:** move the min-score slider. Good labels usually stay when the threshold is raised.

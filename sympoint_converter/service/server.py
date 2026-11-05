@@ -9,7 +9,7 @@ API (JSON, CORS enabled):
 
     GET  /health   -> {"ok": true, "model": "SymPointV2", "device": "...", ...}
     POST /predict  <- {"tiles": [...]} made by sympoint_converter.sympoint_io.export_tiles
-                   -> {"model": "SymPointV2", "tiles": [{"id", "semantic": [[class, score], ...],
+                   -> {"model": "SymPointV2", "tiles": [{"id", "semantic": [[class, share, mass], ...],
                                                            "instances": [{"label", "score", "members"}]}]}
 
 Offline use (no server):  python sympoint_server.py --config ... --checkpoint ... --in request.json --out resp.json
@@ -159,16 +159,20 @@ class Runner:
         torch.cuda.empty_cache()
         with torch.autocast("cuda", enabled=bool(self.cfg.get("fp16", False))):
             res = self.model(batch, return_loss=False)
+        # semantic_scores = sum over the queries of class prob x mask prob: not a probability (can be
+        # > 1). Report the class share (0-1) and the total mass (how strongly any query covers the line).
         sem = res["semantic_scores"].float().cpu().numpy()[:n]          # (n, 35)
+        mass = sem.sum(1)
         cls = sem.argmax(1)
-        score = sem[np.arange(n), cls]
+        score = sem[np.arange(n), cls] / np.maximum(mass, 1e-9)
         insts = []
         for ins in res["instances"]:
             mem = np.nonzero(np.asarray(ins["masks"])[:n])[0]
             if len(mem):
                 insts.append({"label": int(ins["labels"]), "score": round(float(ins["scores"]), 4),
                               "members": mem.tolist()})
-        return {"id": tile["id"], "semantic": [[int(c), round(float(s), 4)] for c, s in zip(cls, score)],
+        return {"id": tile["id"], "semantic": [[int(c), round(float(s), 4), round(float(m), 4)]
+                                              for c, s, m in zip(cls, score, mass)],
                 "instances": insts}
 
     def predict(self, request):

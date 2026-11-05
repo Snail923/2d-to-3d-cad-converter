@@ -14,7 +14,7 @@ import numpy as np
 from .classes import BG, CLASSES, COLORS, GROUP_OF, GROUPS
 from .sympoint_io import COMMAND_NAMES
 
-GROUP_ORDER = ["wall", "door", "window", "opening", "stair", "railing", "furniture", "other"]
+GROUP_ORDER = ["wall", "curtain_wall", "door", "window", "opening", "stair", "railing", "furniture", "other"]
 
 
 def summarize(prims, labels: dict, drawing=None) -> dict:
@@ -147,7 +147,7 @@ box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;font-size:12px;max-width:320px
 <script>
 const P=__PAYLOAD__;const D=P.data,S=P.summary;
 const $=id=>document.getElementById(id);const N=D.cls.length;
-const GC={wall:[167,92,32],door:[224,62,155],window:[96,78,245],opening:[233,59,217],stair:[247,206,75],railing:[64,52,105],furniture:[94,150,113],other:[120,120,120],unlabelled:[200,200,195]};
+const GC={wall:[167,92,32],curtain_wall:[121,104,178],door:[224,62,155],window:[96,78,245],opening:[233,59,217],stair:[247,206,75],railing:[64,52,105],furniture:[94,150,113],other:[120,120,120],unlabelled:[200,200,195]};
 const rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;const pct=x=>(100*x).toFixed(1)+'%';
 const hidden=new Set();let thr=0,dim=false;
 const m=P.meta;$('meta').textContent=[m.file,m.units&&('units '+m.units),S.primitives.toLocaleString()+' primitives',

@@ -165,11 +165,12 @@ def export_tiles(drawing, cfg: dict, prims=None) -> dict:
     return {**base, "tiles": tiles}
 
 
-def labels_from_response(request: dict, response: dict, min_score: float = 0.0) -> dict:
+def labels_from_response(request: dict, response: dict, min_score: float = 0.0, min_mass: float = 0.0) -> dict:
     """Labels of the owned primitives, aggregated per DXF entity.
 
     Returns {"model", "primitives": {pidx: [class index, score]}, "entities": {raw_id: {"label",
-    "score", "length"}} (length-weighted vote of its primitives), "instances": [{"label", "score",
+    "score", "length"}} (length-weighted vote of its primitives; score = share of the class in the
+    model's answer for the line, 0-1; lines whose answer mass is below ``min_mass`` are unlabelled), "instances": [{"label", "score",
     "members": [raw ids], "pidx": [...]}]}. Unlabelled / below ``min_score`` primitives are omitted."""
     req = {t["id"]: t for t in request.get("tiles", [])}
     votes: dict[str, dict[int, float]] = {}
@@ -182,8 +183,13 @@ def labels_from_response(request: dict, response: dict, min_score: float = 0.0) 
             continue
         L = t["sympoint"]["lengths"]
         pidx = t.get("pidx") or list(range(len(t["ids"])))
-        for k, (cls, sc) in enumerate(rt.get("semantic", [])):
-            if k >= len(t["ids"]) or not t["own"][k] or cls is None or cls >= BG or sc < min_score:
+        for k, ans in enumerate(rt.get("semantic", [])):
+            cls, sc = ans[0], ans[1]
+            mass = ans[2] if len(ans) > 2 else None        # older service: [class, score]
+            if mass is None and sc is not None and sc > 1:   # older service: raw summed score
+                sc = 1.0
+            if k >= len(t["ids"]) or not t["own"][k] or cls is None or cls >= BG or sc < min_score \
+                    or (mass is not None and mass < min_mass):
                 continue
             prim[int(pidx[k])] = [int(cls), float(sc)]
             rid = t["ids"][k]

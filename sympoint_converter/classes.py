@@ -24,7 +24,8 @@ COLORS = {n: c for n, c in CATEGORIES}
 BG = len(CLASSES)            # 35 = background / no label
 
 GROUPS = {
-    "wall": ["wall", "curtain wall"],
+    "wall": ["wall"],
+    "curtain_wall": ["curtain wall"],
     "door": ["single door", "double door", "sliding door", "folding door", "revolving door", "rolling door"],
     "window": ["window", "bay window", "blind window"],
     "opening": ["opening symbol"],

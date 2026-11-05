@@ -73,7 +73,7 @@ def cmd_label(a):
                       f"  python sympoint_server.py --config <yaml> --checkpoint <pth> --in {p} --out resp.json\n"
                       f"then: python -m sympoint_converter label {a.input} --response resp.json -o {a.out}")
                 continue
-        labels = labels_from_response(req, resp, cfg["min_label_score"])
+        labels = labels_from_response(req, resp, cfg["min_label_score"], cfg["min_label_mass"])
         summ = summarize(prims, labels, d)
         raw = d.raw_entities
         ents = {rid: {**v, "handle": raw[rid].handle if rid in raw else None,
