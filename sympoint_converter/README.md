@@ -99,6 +99,15 @@ python -m sympoint_converter label samples/real/apartment-building-plan.dxf --ur
 * **Tile size:** FloorPlanCAD drawings are crops of apartment / office plans. If labels look poor, compare
   `--tile-m 15 20 30`.
 
+## Troubleshooting
+
+* **`CUDA error: device-side assert triggered`** (and the server stops): SymPointV2's neighbour search
+  (`modules/pointops/src/knnquery/knnquery_cuda_kernel.cu`) keeps its candidates in arrays of 100, but its decoder
+  asks for 256 neighbours. `setup.sh` patches the arrays to 512 and rebuilds; on start the server checks the
+  neighbour search against PyTorch and refuses to run with an unpatched build.
+* **`checkpoint does not match this config`**: use the `.yaml` that came with the weights.
+* **`GPU out of memory`**: lower `max_primitives_per_tile` or `tile_m` in `config.json`.
+
 ## Configuration (`sympoint_converter/config.json`)
 
 | key | meaning |

@@ -90,10 +90,44 @@ def _check_weights(checkpoint, model):
     return share
 
 
+KNN_FIX = ("Rebuild pointops with the patched neighbour search (fixed arrays of 100 entries, but SymPointV2's "
+           "decoder asks for 256 neighbours):\n"
+           "  sed -i 's/best_dist\\[100\\]/best_dist[512]/; s/best_idx\\[100\\]/best_idx[512]/' "
+           "modules/pointops/src/knnquery/knnquery_cuda_kernel.cu\n"
+           "then compile pointops again (CUDA_HOME / PATH / TORCH_CUDA_ARCH_LIST set as for the first build), "
+           "or simply re-run sympoint_converter/service/setup.sh.")
+
+
+def _self_test_knn():
+    """SymPointV2 interpolates attention masks with k = 4**4 = 256 nearest neighbours, but the
+    original knnquery kernel keeps its candidates in arrays of 100: k > 100 writes past them and
+    returns garbage indices (a 'device-side assert' later). Compare k = 256 with PyTorch."""
+    from modules.pointops.functions import pointops
+    g = torch.Generator(device="cpu").manual_seed(0)
+    xyz = torch.rand(3000, 3, generator=g).cuda().contiguous()
+    q = xyz[:128].contiguous()
+    o, no = torch.cuda.IntTensor([3000]), torch.cuda.IntTensor([128])
+    try:
+        idx, _ = pointops.knnquery(256, xyz, q, o, no)
+        torch.cuda.synchronize()
+    except Exception as e:  # noqa: BLE001  (an unpatched kernel can also crash outright)
+        raise SystemExit(f"pointops self-test FAILED: {type(e).__name__}: {e}\n" + KNN_FIX) from None
+    idx = idx.long()
+    if int(idx.min()) < 0 or int(idx.max()) >= 3000:
+        raise SystemExit("pointops self-test FAILED: the neighbour search returns indices out of range.\n" + KNN_FIX)
+    ref = torch.cdist(q, xyz).topk(256, largest=False).indices
+    agree = sum(len(set(a.tolist()) & set(b.tolist())) for a, b in zip(idx.cpu(), ref.cpu())) / (128 * 256)
+    if agree < 0.99:
+        raise SystemExit(f"pointops self-test FAILED: only {100 * agree:.0f}% of the 256 nearest neighbours are "
+                         "right.\n" + KNN_FIX)
+    print("pointops self-test OK (256 nearest neighbours)")
+
+
 class Runner:
     def __init__(self, config, checkpoint):
         if not torch.cuda.is_available():
             raise SystemExit("PyTorch does not see a CUDA GPU (torch.cuda.is_available() is False).")
+        _self_test_knn()
         cfg = Munch.fromDict(yaml.safe_load(open(config)))
         self.cfg = cfg
         # SVGNet.train() does not return self, so .eval() would return None: call it separately
@@ -180,7 +214,15 @@ def serve(runner, host, port):
                 self._send(500, {"error": "GPU out of memory: lower max_primitives_per_tile or tile_m "
                                           "in sympoint_converter/config.json"})
             except Exception as e:  # noqa: BLE001
-                self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                msg = f"{type(e).__name__}: {e}"
+                fatal = "CUDA error" in msg or "AcceleratorError" in msg
+                if fatal:
+                    msg += ("\nThe GPU state of the service is no longer usable after a CUDA error: the service "
+                            "stops now. Restart it (and send the error above if it happens again).")
+                self._send(500, {"error": msg})
+                if fatal:
+                    sys.stderr.write(msg + "\n")
+                    threading.Thread(target=lambda: (time.sleep(0.5), os._exit(3)), daemon=True).start()
 
     print(f"SymPointV2 service on http://{host}:{port}  (GPU: {runner.info['device']}, "
           f"torch {runner.info['torch']}, CUDA {runner.info['cuda']})")

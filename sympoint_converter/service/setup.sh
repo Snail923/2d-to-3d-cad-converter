@@ -33,7 +33,15 @@ python -c "import torch" 2>/dev/null || pip install --timeout 120 torch torchvis
 pip install munch pyyaml numpy scipy svgpathtools scikit-learn tqdm tensorboardx
 
 echo "== compile pointops with the private nvcc"
-if ! python -c "import torch, pointops_cuda" 2>/dev/null; then
+# The neighbour search keeps its candidates in arrays of 100, but SymPointV2's decoder asks for
+# 256 neighbours: patch to 512 (otherwise garbage indices -> "CUDA error: device-side assert").
+KNN="$DIR/modules/pointops/src/knnquery/knnquery_cuda_kernel.cu"
+REBUILD=0
+if grep -q "best_dist\[100\]" "$KNN"; then
+  sed -i 's/best_dist\[100\]/best_dist[512]/; s/best_idx\[100\]/best_idx[512]/' "$KNN"
+  REBUILD=1
+fi
+if [ "$REBUILD" = 1 ] || ! python -c "import torch, pointops_cuda" 2>/dev/null; then
   export CUDA_HOME="$CONDA_PREFIX" PATH="$CONDA_PREFIX/bin:$PATH"
   CC_MAJ=$(python -c "import torch; print(torch.cuda.get_device_capability(0)[0])" 2>/dev/null || echo "")
   CC_MIN=$(python -c "import torch; print(torch.cuda.get_device_capability(0)[1])" 2>/dev/null || echo "")
@@ -41,7 +49,7 @@ if ! python -c "import torch, pointops_cuda" 2>/dev/null; then
   nvcc --version | tail -1
   # <THC/THC.h> was removed from PyTorch >= 1.11; nothing else from THC is used.
   sed -i '/#include <THC\/THC.h>/d' "$DIR"/modules/pointops/src/*/*.cpp
-  (cd "$DIR/modules/pointops" && rm -rf build ./*.egg-info && pip install --no-build-isolation .)
+  (cd "$DIR/modules/pointops" && rm -rf build ./*.egg-info && pip install --no-build-isolation --force-reinstall --no-deps .)
 fi
 python -c "import torch, pointops_cuda; print('pointops OK on', torch.cuda.get_device_name(0))"
 
