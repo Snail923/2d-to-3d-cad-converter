@@ -97,7 +97,7 @@ def cmd_label(a):
                       f"then: python -m sympoint_converter label {a.input} --response resp.json -o {a.out}")
                 continue
         labels, prims, req, resp, source = get_labels(d, a.input, cfg, a.url, _response(a))
-        if source == "service":
+        if source != "response file":            # from the service or the cache: keep a copy next to the viewer
             _dump(resp, f"{base}{sfx}.sympoint.response.json")
         summ = summarize(prims, labels, d)
         raw = d.raw_entities
