@@ -52,6 +52,12 @@ class SymPointPipeline(ExtractionPipeline):
                              "primitives": len(prims), "labelled_entities": len(labels["entities"]),
                              "model_seconds": resp.get("seconds"), **log}
 
+    def _stage_reconstruct(self, st):
+        super()._stage_reconstruct(st)
+        from .gap_typing import type_gaps
+        st.logs["reconstruct"]["gap_typing"] = type_gaps(st._generic, st.doors, st.windows, st.walls,
+                                                         st.sp_prims, st.sp_labels, self.sp)
+
     def _stage_resolve(self, st):
         c = st.ctx.candidates
         walls = list(c.get("sympoint_walls", []))

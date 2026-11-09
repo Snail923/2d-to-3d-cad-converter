@@ -39,6 +39,7 @@ DOOR_SUBTYPE = {"single door": "single_swing", "double door": "double_swing", "s
 WINDOW_SUBTYPE = {"window": "window", "bay window": "bay_window", "blind window": "blind_window",
                   "curtain wall": "curtain_wall"}
 WINDOW_GROUPS = ("window", "curtain_wall")
+ELEMENT_LAYER_KINDS = ("wall", "balcony", "window", "door", "column", "stair", "furniture")
 
 
 def _n(u):
@@ -221,6 +222,13 @@ class Extractor:
                          thickness_source="polyline_width", detected_interval=(st.s0, st.s1))
                 w.add_evidence("sympoint_faces", 1.0)
                 w.detection_methods.add("sympoint_wide_polyline")
+            elif self._layer_kind(st) == "balcony":
+                # the model calls it structure, its layer says balcony: a balcony edge drawn as one line
+                w = Wall(id="", kind="centerline", u=st.u, c=st.c, s0=st.s0, s1=st.s1, thickness=None,
+                         thickness_source="unknown", detected_interval=(st.s0, st.s1))
+                w.add_evidence("sympoint_faces", 0.5)
+                w.add_evidence("railing_label", score_of[k])
+                w.detection_methods.add("sympoint_balcony_edge")
             elif single_line_drawing:
                 w = Wall(id="", kind="centerline", u=st.u, c=st.c, s0=st.s0, s1=st.s1, thickness=None,
                          thickness_source="unknown", detected_interval=(st.s0, st.s1))
@@ -234,6 +242,16 @@ class Extractor:
             out.append(w)
         self.log["single_line_walls"] = len(out)
         return out
+
+    def _layer_kind(self, st):
+        """Building element a stroke's layer names (layer semantics), None when unclear."""
+        kinds = set()
+        for ly in st.layers or {st.layer}:
+            p = self.ctx.layers.get(ly)
+            k = p.primary if p is not None else None
+            if k in ELEMENT_LAYER_KINDS:
+                kinds.add(k)
+        return kinds.pop() if len(kinds) == 1 else None
 
     def _merge_bands(self, walls):
         """Walls side by side (a middle line inside one wall) -> one band."""

@@ -214,3 +214,41 @@ def test_switchback_without_marker_still_alternates():
     assert A.assembly == B.assembly
     assert math.isclose(A.run[1], -B.run[1], abs_tol=1e-6)        # opposite directions
     assert A.landing is not None and _w(st, A.landing)[1] < 1.0     # the closed end is the landing
+
+
+def test_thin_outline_wall_with_a_door_is_not_a_railing():
+    """A room on the outline closed by thin walls, entered through a door in one of them: a
+    railing never has a door, so the room is not a balcony and the wall stays full height."""
+    s = PlanSpec("door_not_railing", "small room with thin outer walls and a door in them")
+    s.chain([(0, 0), (9, 0), (9, 5), (0, 5)], 0.3, closed=True)
+    s.chain([(5.5, 5.0), (5.5, 6.4), (8.0, 6.4), (8.0, 5.0)], 0.1)
+    s.opening_at((6.75, 6.4), 0.9, "door")
+    s.opening_at((6.75, 5.0), 0.9, "door")
+    s.opening_at((2, 0), 1.0, "door")
+    st = _run(*[render_plan(s, Style(units="m", layers="aia"))[0], "door_not_railing.dxf"])
+    b = st.building
+    host = [w for w in _live(b.walls) if any(o in w.openings for o in b.openings if b.openings[o].type == "door")
+            and _w(st, w.axis.centroid)[1] > 6.0]
+    assert host and all(w.classification != "railing" for w in host)
+    assert not [r for r in _live(b.rooms) if r.classification == "balcony"]
+
+
+def test_open_balcony_edge_on_a_balcony_layer_is_a_railing():
+    """A balcony drawn as an open L of double lines on a 'BALCONY' layer (no closing side, so no
+    balcony room): its edges are railings anyway - a low parapet with glass above in 3D."""
+    s = PlanSpec("open_balcony", "flat with an open balcony edge")
+    s.chain([(0, 0), (9, 0), (9, 5), (0, 5)], 0.3, closed=True)
+    s.opening_at((2, 0), 1.0, "door")
+    doc, _ = render_plan(s, Style(units="m", layers="aia"))
+    msp = doc.modelspace()
+    doc.layers.add("BALCONY")
+    for off in (0.0, 0.1):                                   # an L: out from the facade, then along it
+        msp.add_line((1.0 + off, 5.15), (1.0 + off, 6.5 - off), dxfattribs={"layer": "BALCONY"})
+        msp.add_line((1.0 + off, 6.5 - off), (4.0, 6.5 - off), dxfattribs={"layer": "BALCONY"})
+    st = _run(doc, "open_balcony.dxf")
+    rails = [w for w in _live(st.building.walls) if w.classification == "railing"]
+    assert rails and st.logs["classify"]["balconies"]["open_railings"] >= 1
+    m3 = build_3d(st.model, PipelineConfig())
+    ids = {w.id for w in rails}
+    assert all(m["vertices"][:, 2].max() <= 0.5 + 1e-6 for m in m3.meshes if m["id"] in ids)
+    assert any(m["id"].removesuffix("_glass") in ids and m["type"] == "window" for m in m3.meshes)

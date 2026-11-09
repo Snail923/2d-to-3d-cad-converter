@@ -247,8 +247,11 @@ class ExtractionPipeline:
         ow = self.cfg["detection"]["weights"]
         th = self.cfg["detection"]["status_thresholds"]
         for o in generic:
+            if o.width < max(st.ctx.tol.snap * 2, 0.05) and o.manual_status is None:
+                o.veto("degenerate gap (no width)")
+                continue
             o.score({**ow["opening"], "manual": 10.0}, th)
-            if o.manual_status is None:
+            if o.manual_status is None and o.status != Status.REJECTED:
                 o.confidence = min(o.confidence, self.cfg["reconstruction"]["unidentified_opening_confidence"])
                 o.status = Status.NEEDS_REVIEW if o.confidence >= th["review"] else Status.REJECTED
         st._generic = generic

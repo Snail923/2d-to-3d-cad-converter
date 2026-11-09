@@ -73,7 +73,9 @@
       0.02,
       0.35
     ],
-    "railing_min_length_m": 0.3
+    "railing_min_length_m": 0.3,
+    "gap_min_share": 0.5,
+    "gap_min_labelled_m": 0.3
   },
   "engine_overrides": {
     "_doc": "Merged into approach 1's configuration for the shared build stages: weights of the evidence approach 2 produces (approach 1's own config files are not changed).",

@@ -255,3 +255,40 @@ def test_railing_labels_make_a_balcony_with_glass_above_a_low_parapet(tmp_path):
     assert parapets and len(glass) == len(parapets)
     assert all(m["vertices"][:, 2].max() < 0.6 for m in parapets)
     assert all(m["vertices"][:, 2].max() > 1.0 for m in glass)
+
+
+def test_balcony_edge_drawn_as_one_line_is_a_railing(tmp_path):
+    """SymPointV2 calls a balcony edge 'wall'. Drawn as a single line on a balcony layer (no second
+    face to pair with), it is a balcony edge: a single-line railing (low parapet + glass), not
+    dropped and not a full-height wall."""
+    from architectural_converter.benchmark.dxf_writer import Style, render_plan
+    from architectural_converter.benchmark.plan_spec import PlanSpec
+    from architectural_converter.reconstruction3d import build_3d
+    s = PlanSpec("balcony_edge", "flat with a balcony edge drawn as one line")
+    s.chain([(0, 0), (9, 0), (9, 5), (0, 5)], 0.3, closed=True)
+    s.opening_at((2, 0), 1.0, "door")
+    doc, _ = render_plan(s, Style(units="m", layers="aia"))
+    doc.layers.add("Balcony")
+    msp = doc.modelspace()
+    msp.add_line((1.0, 5.15), (1.0, 6.5), dxfattribs={"layer": "Balcony"})
+    msp.add_line((1.0, 6.5), (6.0, 6.5), dxfattribs={"layer": "Balcony"})
+    path = str(tmp_path / "balcony_edge.dxf")
+    doc.saveas(path)
+    cfg = load_config()
+    d = load_drawing(path)
+    req = export_tiles(d, cfg)
+    tiles = [{"id": t["id"], "instances": [], "semantic": [
+        [CLASSES.index("wall"), 0.95, 1.0] if t["layer_names"][lid - 1] in ("A-WALL", "Balcony") else
+        ([CLASSES.index(c), 0.95, 1.0] if (c := ORACLE.get(t["layer_names"][lid - 1])) else [32, 0.1, 0.05])
+        for lid in t["sympoint"]["layerIds"]]} for t in req["tiles"]]
+    pipe = SymPointPipeline(cfg, response={"tiles": tiles}, labels_progress=lambda m: None)
+    st = pipe.process(path)
+    raw = st.drawing.raw_entities
+    live = [w for w in st.building.walls.values() if w.status != Status.REJECTED]
+    edge = [w for w in live if {raw[r].layer for r in w.source_entities if r in raw} == {"Balcony"}]
+    assert edge and all(w.classification == "railing" for w in edge)
+    assert "sympoint_balcony_edge" in {m for w in edge for m in w.detection_methods}
+    m3 = build_3d(st.model, pipe.cfg)
+    ids = {w.id for w in edge}
+    assert all(m["vertices"][:, 2].max() <= 0.5 + 1e-6 for m in m3.meshes if m["id"] in ids and m["type"] == "wall")
+    assert any(m["id"].removesuffix("_glass") in ids and m["type"] == "window" for m in m3.meshes)

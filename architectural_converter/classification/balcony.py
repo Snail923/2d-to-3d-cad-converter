@@ -116,15 +116,23 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
     pad = max(tol.snap * 3, 0.02)
 
     railing_ev: dict[str, float] = {}
+    explicit: set[str] = set()                        # named a railing (layer / detector), not only thin
+    ops = getattr(b, "openings", {}) or {}
+    log["walls_with_doors_not_railing"] = 0
     for w in walls.values():
         if w.classification != "exterior_wall" or FACADE_LINE_NOTE in w.notes:
             continue                                  # a line inside the facade is not a rail
+        if any(oid in ops and _live(ops[oid]) and ops[oid].type == "door" for oid in w.openings):
+            log["walls_with_doors_not_railing"] += 1
+            continue                                  # a railing never has a door: this is a wall
         ev = 0.0
         lay = _layer_balcony_score(w, drawing, sem)
         if lay >= 0.5:
             ev = max(ev, lay)
+            explicit.add(w.id)
         if w.evidence.get("railing_label", 0.0) >= 0.5:
             ev = max(ev, w.evidence["railing_label"])     # a detector recognised the railing itself
+            explicit.add(w.id)
         if not w.thickness or w.kind == "centerline":
             ev = max(ev, 0.7)                         # single line on the outline: rail / parapet line
         elif t_ext and w.thickness <= rel * t_ext:
@@ -214,8 +222,23 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
                     w.classification = "exterior_wall"
                     w.notes.append(f"facade towards balcony {r.id}")
                     log["facade_walls"] += 1
-    # a wall bounding a balcony on one side and an indoor room on the other is facade
+    # a railing does not need a closed balcony room: an outline element named a railing (balcony /
+    # railing layer, detector label) that bounds no indoor room is an outdoor edge (open balconies,
+    # galleries, terraces drawn without a closing line)
     balconies = {rid for rid in log["balconies"]}
+    log["open_railings"] = 0
+    for wid in explicit:
+        w = walls[wid]
+        if w.classification != "exterior_wall":
+            continue
+        indoor = [x for x in w.rooms if x in b.rooms and x not in balconies and _live(b.rooms[x])
+                  and b.rooms[x].classification != "balcony" and _contact(b.rooms[x], w, tol) > junction]
+        if not indoor:
+            w.classification = "railing"
+            w.notes.append("railing / parapet: named a railing and bounds no indoor room (open balcony edge)")
+            log["railings"] += 1
+            log["open_railings"] += 1
+    # a wall bounding a balcony on one side and an indoor room on the other is facade
     for w in walls.values():
         if w.classification == "railing":
             if any(x in b.rooms and x not in balconies and _live(b.rooms[x]) and _contact(b.rooms[x], w, tol) > junction
