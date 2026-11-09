@@ -175,51 +175,34 @@ def build_3d(model: dict, cfg) -> Model3D:
     return out
 
 
-def _shape(pg):
-    from shapely.geometry import Polygon
-    if not pg:
-        return None
-    if isinstance(pg, dict):
-        return Polygon(pg["exterior"], pg.get("holes") or []).buffer(0)
-    return Polygon(pg).buffer(0)
-
-
 def _ground(out, model, view, p2, levels, stacked) -> dict:
-    """Ground slabs where the building has no room floor (see topology/ground.py)."""
-    from shapely.geometry import box as _box
+    """Ground slabs for the areas the model lists in building.ground (computed by Phase 1, see
+    topology/ground.py): no geometry operations here, only extrusion."""
+    from shapely.geometry import Polygon
     from shapely.ops import triangulate
-    from ..geometry.geometric_utils import polygons_of
-    from ..topology.ground import unassigned_floor
-    gc = p2.get("ground", {})
-    fp = model.get("building", {}).get("footprint")
-    if not gc.get("enabled", True) or not fp:
+    if not p2.get("ground", {}).get("enabled", True):
         return {}
-    outline = [_shape(x) for x in (fp if isinstance(fp, list) else [fp])]
-    cover = [_shape(r.get("polygon")) for r in view["rooms"]]
-    cover += [_shape(w["geometry"].get("polygon")) for w in view["walls"]]
-    cover += [_shape(c.get("polygon")) for c in view["columns"]]
-    pieces = unassigned_floor([o for o in outline if o is not None], [c for c in cover if c is not None],
-                              gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
-    plans = [(lv["id"], _box(*lv["bbox"])) for lv in levels.values()
-             if stacked and lv.get("kind") == "floor_plan" and lv.get("bbox")]
     slab = p2["slab_thickness_m"]
-    level_of = {}
-    for k, p in enumerate(pieces):
-        lid = None
-        if stacked:
-            lid = next((i for i, bx in plans if bx.contains(p.representative_point())), None)
-            if lid is None:
-                continue
-        parts = [p] if not p.interiors else [t for t in triangulate(p) if p.contains(t.representative_point())]
-        Vs = [extrude(list(q.exterior.coords), -slab, 0.0) for g in parts for q in polygons_of(g)]
-        if not Vs:
+    level_of, area = {}, 0.0
+    for k, gp in enumerate(model.get("building", {}).get("ground") or []):
+        pg = gp.get("polygon")
+        if not pg or (stacked and gp.get("level") not in levels):
             continue
-        V, F = _merge(Vs)
+        try:
+            if pg.get("holes"):
+                p = Polygon(pg["exterior"], pg["holes"])
+                parts = [list(t.exterior.coords) for t in triangulate(p) if p.contains(t.representative_point())]
+            else:
+                parts = [pg["exterior"]]
+            V, F = _merge([extrude(r, -slab, 0.0) for r in parts])
+        except Exception:  # noqa: BLE001  (an optional slab never stops the 3D build)
+            continue
         gid = f"ground_{k + 1:03d}"
         out.add(gid, "floor", "ground", V, F, COLORS["ground"])
-        level_of[gid] = lid
-    if pieces:
-        out.metadata["ground_slabs"] = {"count": len(level_of), "area_m2": round(sum(p.area for p in pieces), 2)}
+        level_of[gid] = gp.get("level")
+        area += gp.get("area") or 0.0
+    if level_of:
+        out.metadata["ground_slabs"] = {"count": len(level_of), "area_m2": round(area, 2)}
     return level_of
 
 

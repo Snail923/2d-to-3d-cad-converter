@@ -431,7 +431,8 @@ class ExtractionPipeline:
         st.report = rep
 
     def ground_pieces(self, st):
-        """Areas inside the building (outline closed over small notches) without a room floor."""
+        """[(polygon, level id)] of areas inside the building (outline closed over small notches)
+        without a room floor. Computed once here; Phase 2 only extrudes them (model building.ground)."""
         from shapely.geometry import box as _box
         from ..topology.ground import unassigned_floor
         gc = self.cfg["phase2"].get("ground", {})
@@ -440,25 +441,42 @@ class ExtractionPipeline:
             return []
         from ..geometry.geometric_utils import polygons_of
         live = lambda e: e.status != Status.REJECTED  # noqa: E731
+        plans = [(lv.id, _box(*lv.bbox)) for lv in b.levels if lv.kind == "floor_plan"] if b.levels else []
+
+        def on_plans(g):
+            c = g.representative_point()
+            return not plans or any(bx.contains(c) for _, bx in plans)
+        # only the floor-plan views take part (elevations, sections, duplicates have no floors)
         cover = [r.polygon for r in b.rooms.values() if live(r) and r.polygon is not None]
         cover += [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis]
         cover += [c.polygon for c in b.columns.values() if live(c) and c.polygon is not None]
-        pieces = unassigned_floor(polygons_of(b.footprint), [g for g in cover if g is not None],
-                                  gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
-        if b.levels:                                   # stacked permit set: floor plan views only
-            plans = [_box(*lv.bbox) for lv in b.levels if lv.kind == "floor_plan"]
-            pieces = [p for p in pieces if any(bx.contains(p.representative_point()) for bx in plans)]
-        return pieces
+        outline = [g for g in polygons_of(b.footprint) if on_plans(g)]
+        try:
+            pieces = unassigned_floor(outline, [g for g in cover if g is not None and on_plans(g)],
+                                      gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
+        except Exception as e:  # noqa: BLE001  (an optional check must never stop the pipeline)
+            st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                      "message": f"ground coverage check skipped: {type(e).__name__}: {e}"})
+            return []
+        out = []
+        for p in pieces:
+            c = p.representative_point()
+            lid = next((i for i, bx in plans if bx.contains(c)), None)
+            if plans and lid is None:
+                continue
+            out.append((p, lid))
+        return out
 
     def _check_ground(self, st, rep):
         pieces = self.ground_pieces(st)
-        for p in pieces:
+        st.ground = pieces
+        for p, _ in pieces:
             c = p.representative_point()
             rep.add("room", "floor_without_room", "warning", None, (c.x, c.y),
                     f"{p.area:.1f} m² inside the building is not part of any room (no floor from a room): "
                     "a wall may be missing, or the space was not recognised as a room.",
                     "Add the missing wall or draw the room; the 3D model fills it with a ground slab.", 0.6, set())
-        st.logs["ground"] = {"unassigned_floor_pieces": len(pieces), "area_m2": round(sum(p.area for p in pieces), 2)}
+        st.logs["ground"] = {"unassigned_floor_pieces": len(pieces), "area_m2": round(sum(p.area for p, _ in pieces), 2)}
 
     def _stage_export(self, st):
         from .database_exporter import build_model
