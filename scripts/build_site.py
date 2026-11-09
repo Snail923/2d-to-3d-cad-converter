@@ -3,7 +3,7 @@
     python scripts/build_site.py [--skip-benchmark] [--wheels-from DIR]
 
 * copies ``web/`` (HTML/JS/CSS, vendored three.js)
-* zips the ``architectural_converter`` package (loaded into Pyodide in the browser)
+* zips the ``architectural_converter`` and ``sympoint_converter`` packages (loaded into Pyodide)
 * downloads the pure-Python wheels not shipped with Pyodide (pinned versions)
 * copies the benchmark drawings as samples (+ reference geometry)
 * runs the benchmark and writes ``benchmark.json`` for the Benchmark tab
@@ -28,6 +28,20 @@ WHEELS = ["ezdxf==1.4.5", "pyparsing==3.2.1", "typing_extensions==4.14.1", "font
           "networkx==3.4.2", "trimesh==5.2.0"]
 
 
+def engine_files() -> list[str]:
+    """Files of both packages shipped to the browser (relative to the repository root)."""
+    out = []
+    for pkg in ("architectural_converter", "sympoint_converter"):
+        for path in glob.glob(os.path.join(ROOT, pkg, "**", "*"), recursive=True):
+            rel = os.path.relpath(path, ROOT)
+            parts = rel.split(os.sep)
+            if os.path.isdir(path) or "__pycache__" in parts or "drawings" in parts or rel.endswith(".pyc") \
+                    or parts[:2] == ["sympoint_converter", "service"]:
+                continue
+            out.append(rel)
+    return sorted(out)
+
+
 def build(out: str, skip_benchmark: bool, wheels_from: str | None):
     from architectural_converter import __version__
     from architectural_converter.benchmark.generate import DEFAULT_DIR
@@ -38,12 +52,11 @@ def build(out: str, skip_benchmark: bool, wheels_from: str | None):
     shutil.copytree(os.path.join(ROOT, "web"), out)
     # engine package
     pkg_zip = os.path.join(out, "engine.zip")
+    # both approaches: architectural_converter (rules) and sympoint_converter (SymPointV2; its GPU
+    # service in service/ runs outside the browser and is not shipped)
     with zipfile.ZipFile(pkg_zip, "w", zipfile.ZIP_DEFLATED) as z:
-        for path in glob.glob(os.path.join(ROOT, "architectural_converter", "**", "*"), recursive=True):
-            rel = os.path.relpath(path, ROOT)
-            if "__pycache__" in rel or "/drawings/" in rel or rel.endswith(".pyc") or os.path.isdir(path):
-                continue
-            z.write(path, rel)
+        for rel in engine_files():
+            z.write(os.path.join(ROOT, rel), rel)
     # wheels
     wdir = os.path.join(out, "wheels")
     os.makedirs(wdir, exist_ok=True)
@@ -84,7 +97,7 @@ def build(out: str, skip_benchmark: bool, wheels_from: str | None):
     with open(os.path.join(out, "benchmark.json"), "w", encoding="utf-8") as fh:
         json.dump(bench, fh, indent=1)
     manifest = {"version": __version__, "built": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                "package": "engine.zip", "wheels": wheels, "samples": samples}
+                "package": "engine.zip", "wheels": wheels, "samples": samples, "sympoint": True}
     with open(os.path.join(out, "build_manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1)
     open(os.path.join(out, ".nojekyll"), "w").close()

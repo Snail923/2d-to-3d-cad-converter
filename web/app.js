@@ -25,6 +25,7 @@ function startWorker() {
 startWorker();
 $("#cancelJob").addEventListener("click", async () => {
   if (!confirm("Stop processing this drawing? The engine will restart (about 10 s).")) return;
+  S.cancelled = true;
   setStatus("Cancelled. Restarting the engine…");
   $("#cancelJob").style.display = "none";
   try { await recoverEngine(); setStatus("Cancelled. Engine ready — you can load another drawing."); }
@@ -35,6 +36,7 @@ $("#cancelJob").addEventListener("click", async () => {
 async function recoverEngine() {
   for (const p of pending.values()) p.reject(new Error("engine restarted"));
   pending.clear();
+  S.results = {};       // the Python-side results are gone with the old engine
   startWorker();
   await call("init", { base: BASE });
   setLoading(null);
@@ -52,7 +54,14 @@ const S = {
   data: null, model: null, view: null, byId: new Map(), selected: null,
   corrections: emptyCorr(), history: [], fileName: null, fileBytes: null, sampleRef: null,
   tool: "select", draft: [], vb: null, samples: [], busy: false,
+  // two extraction methods: "rules" (approach 1) and "sympoint" (approach 2, SymPointV2 on a local GPU)
+  method: "rules", show: "rules", results: {}, corrByMethod: {}, spAvailable: false, spCache: new Map(), cancelled: false,
 };
+const SP_KEY = "cad2d3d.method";
+const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false };
+try { Object.assign(SPC, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
+function saveSpc() { try { localStorage.setItem(SP_KEY, JSON.stringify(SPC)); } catch { /* private mode */ } }
+const METHOD_NAME = { rules: "approach 1 (rules)", sympoint: "approach 2 (SymPointV2)" };
 function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {} }; }
 
 function setStatus(t) { $("#status").textContent = t; }
@@ -110,6 +119,8 @@ function download(name, data, type) {
       sel.appendChild(o);
     }
     $("#build").textContent = `· engine ${info.version} · built ${info.built}`;
+    S.spAvailable = !!info.sympoint;
+    initMethodUi();
     setLoading(null);
     setStatus("Ready. Open a DXF file or load a sample.");
     renderBenchmark();
@@ -143,13 +154,38 @@ async function loadSample() {
   await runFile(file, buf);
 }
 
-async function runFile(name, buf, disabled = [], safe = false) {
+async function runFile(name, buf) {
+  if (S.busy) return;
+  S.fileName = name; S.fileBytes = buf.slice(0);
+  S.results = {}; S.corrByMethod = { rules: emptyCorr(), sympoint: emptyCorr() };
+  S.corrections = S.corrByMethod.rules; S.history = [];
+  await spSafe("sp_reset");
+  $("#tabCompareBtn").style.display = "none";
+  await applyMethod();
+}
+
+// run what the selected method needs for the loaded drawing (results already computed are kept)
+async function applyMethod() {
+  updateMethodUi();
+  if (!S.fileBytes || S.busy) return;
+  const need = S.method === "compare" ? ["rules", "sympoint"] : [S.method];
+  if (S.show && S.results[S.show]) await spSafe("sp_activate", { method: S.show });
+  for (const m of need) {
+    if (S.results[m]) continue;
+    if (m === "rules") await runRules(S.fileName, S.fileBytes.slice(0));
+    else await runSymPoint(S.fileName, S.fileBytes.slice(0));
+  }
+  const want = S.method === "compare" ? (S.results.sympoint ? "sympoint" : "rules") : S.method;
+  if (S.results[want]) await show(want);
+  if (S.method === "compare" && S.results.rules && S.results.sympoint) await renderCompare();
+  updateMethodUi();
+}
+
+async function runRules(name, buf, disabled = [], safe = false) {
   if (S.busy) return;
   S.busy = true;
-  S.fileName = name; S.fileBytes = buf.slice(0);
-  S.corrections = emptyCorr(); S.history = [];
   const notes = [...disabled.map((d) => d.replace(/_/g, " ")), ...(safe ? ["safe mode"] : [])];
-  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` + (notes.length ? ` — retry: ${notes.join(", ")}` : "") + "…");
+  startJob(`Approach 1 (rules): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` + (notes.length ? ` — retry: ${notes.join(", ")}` : "") + "…");
   const t0 = performance.now();
   let retry = null;
   try {
@@ -158,8 +194,12 @@ async function runFile(name, buf, disabled = [], safe = false) {
     if (safe) runtime.safe_mode = true;
     const config = Object.keys(runtime).length ? { runtime } : null;
     const res = await call("process", { name, bytes: buf, config }, [buf]);
-    load(JSON.parse(res));
-    setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+    S.results.rules = JSON.parse(res);
+    await spSafe("sp_remember", { method: "rules" });
+    if (S.show) S.corrByMethod[S.show] = S.corrections;
+    S.show = null;
+    await show("rules");
+    setStatus(`${name}: approach 1 (rules) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
       (notes.length ? ` (after an engine error: ${notes.join(", ")})` : ""));
   } catch (e) {
     if (/engine restarted/.test(e.message)) return;  // cancelled by the user
@@ -183,19 +223,203 @@ async function runFile(name, buf, disabled = [], safe = false) {
     setLoading(null);
     S.busy = false;
   }
-  if (retry) await runFile(name, S.fileBytes, retry[0], retry[1]);
+  if (retry) await runRules(name, S.fileBytes.slice(0), retry[0], retry[1]);
+}
+
+// ------------------------------------------------------------------ approach 2: SymPointV2 on the local GPU
+// approach-2 bookkeeping must never disturb approach 1: if it fails, approach 2 is switched off
+async function spSafe(cmd, args = {}) {
+  if (!S.spAvailable) return null;
+  try { return await call(cmd, args); }
+  catch (e) {
+    if (/engine restarted/.test(e.message)) throw e;
+    S.spAvailable = false;
+    $("#spStatus").innerHTML = `<b class="err">Approach 2 is unavailable in this build:</b> ${esc(e.message.split("\n").slice(-2).join(" "))}`;
+    for (const o of $("#method").options) if (o.value !== "rules") o.disabled = true;
+    return null;
+  }
+}
+function spEndpoint() { return SPC.endpoint.trim().replace(/\/+$/, ""); }
+function spHelp(msg) {
+  return `${esc(msg)}<br>Start the service on this computer: <code>python -m sympoint_converter server start</code>
+    (setup: <code>sympoint_converter/README.md</code>), then press <b>Test connection</b>.`;
+}
+async function spPredict(req) {
+  const tiles = req.tiles, out = [], per = 8, t0 = performance.now();
+  for (let i = 0; i < tiles.length; i += per) {
+    if (S.cancelled) throw new Error("cancelled");
+    setLoading(`SymPointV2 on your GPU: ${Math.min(i + per, tiles.length)}/${tiles.length} tiles…`);
+    let r;
+    try {
+      r = await fetch(spEndpoint() + "/predict", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tiles: tiles.slice(i, i + per) }) });
+    } catch (e) {
+      throw new Error(`the SymPointV2 service is not reachable at ${spEndpoint()} (${e.message})`);
+    }
+    if (!r.ok) {
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).error || msg; } catch { /* plain text */ }
+      throw new Error(`the SymPointV2 service answered ${r.status}: ${msg.slice(0, 400)}`);
+    }
+    out.push(...(await r.json()).tiles);
+  }
+  return { model: "SymPointV2", tiles: out, seconds: +((performance.now() - t0) / 1000).toFixed(2) };
+}
+
+async function runSymPoint(name, buf) {
+  if (S.busy || !S.spAvailable) return;
+  S.busy = true; S.cancelled = false;
+  startJob(`Approach 2 (SymPointV2): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
+  const t0 = performance.now();
+  const config = { tile_m: +SPC.tile || 20 };
+  const key = `${name}|${buf.byteLength}|${config.tile_m}`;
+  try {
+    let resp = S.spCache.get(key);
+    if (!resp) {
+      const req = JSON.parse(await call("sp_request", { name, bytes: buf.slice(0), config }));
+      setLoading(`SymPointV2: ${req.primitives.toLocaleString()} lines in ${req.tiles.length} tile(s) of ${config.tile_m} m → ${spEndpoint()}`);
+      resp = JSON.stringify(await spPredict(req));
+      S.spCache.set(key, resp);
+    } else {
+      setLoading("SymPointV2 labels for this drawing are already known (cached)");
+    }
+    setLoading("Building walls, doors and windows from the labels…");
+    S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config }, [buf]));
+    if (S.show) S.corrByMethod[S.show] = S.corrections;
+    S.show = null;
+    await show("sympoint");
+    const sp = S.results.sympoint.sympoint;
+    $("#spBadge").textContent = "on";
+    $("#spStatus").innerHTML = `<span class="ok">Done:</span> ${sp.extract.labelled_entities.toLocaleString()} DXF entities labelled` +
+      (sp.model_seconds ? ` in ${sp.model_seconds} s on the GPU` : "") + ".";
+    setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  } catch (e) {
+    if (/engine restarted|cancelled/.test(e.message)) { setStatus("Cancelled."); return; }
+    const restart = /stops now|CUDA error/.test(e.message) ? " After a CUDA error the service stops itself: start it again." : "";
+    $("#spStatus").innerHTML = `<b class="err">Approach 2 failed:</b> ${spHelp(e.message + "." + restart)}`;
+    $("#spBadge").textContent = "off";
+    setStatus("Approach 2 (SymPointV2) failed: " + e.message);
+    $("#spPanel").open = true;
+  } finally {
+    setLoading(null);
+    S.busy = false;
+  }
+}
+
+// show one method's result (2D, 3D, issues, exports and re-runs then act on it)
+async function show(method) {
+  if (!S.results[method]) return;
+  if (S.show && S.show !== method) S.corrByMethod[S.show] = S.corrections;
+  if (S.show !== method) await spSafe("sp_activate", { method });
+  const same = S.show === method;
+  S.show = method;
+  S.corrections = S.corrByMethod[method] || (S.corrByMethod[method] = emptyCorr());
+  S.history = same ? S.history : [];
+  load(S.results[method], !!S.vb);
+  updateMethodUi();
 }
 
 async function rerun() {
   if (!S.model || S.busy) return;
   S.busy = true;
-  startJob("Re-running resolution, reconstruction, topology and validation with your corrections…");
+  startJob(`Re-running ${METHOD_NAME[S.show] || ""} from resolution with your corrections…`);
   try {
     const t0 = performance.now();
-    load(JSON.parse(await call("rerun", { corrections: S.corrections })), true);
+    const data = JSON.parse(await call(S.spAvailable ? "sp_rerun" : "rerun", { corrections: S.corrections }));
+    S.results[S.show] = data;
+    load(data, true);
     setStatus(`Re-run with ${countCorr()} correction(s) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    if (S.method === "compare" && S.results.rules && S.results.sympoint) await renderCompare();
   } catch (e) { alert("Re-run failed: " + e.message); }
   finally { setLoading(null); S.busy = false; }
+}
+
+// ------------------------------------------------------------------ method UI
+function initMethodUi() {
+  const sel = $("#method");
+  if (!S.spAvailable) { for (const o of sel.options) if (o.value !== "rules") o.disabled = true; SPC.method = "rules"; }
+  S.method = SPC.method;
+  sel.value = S.method;
+  $("#spEndpoint").value = SPC.endpoint;
+  $("#spTile").value = SPC.tile;
+  $("#spColour").checked = !!SPC.colour;
+  sel.addEventListener("change", async () => { S.method = SPC.method = sel.value; saveSpc(); await applyMethod(); });
+  $("#spEndpoint").addEventListener("change", () => { SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc(); });
+  $("#spTile").addEventListener("change", () => { SPC.tile = Math.max(5, Math.min(60, +$("#spTile").value || 20)); $("#spTile").value = SPC.tile; saveSpc(); });
+  $("#spColour").addEventListener("change", () => { SPC.colour = $("#spColour").checked; saveSpc(); if (S.view) draw2d(true); renderSpLegend(); });
+  $("#spTest").addEventListener("click", spTest);
+  for (const b of $$("#showSwitch [data-show]")) b.addEventListener("click", () => !S.busy && show(b.dataset.show));
+  updateMethodUi();
+  if (S.method !== "rules") spTest(true);
+}
+async function spTest(quiet = false) {
+  SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc();
+  $("#spStatus").textContent = "Contacting " + spEndpoint() + "…";
+  try {
+    const j = await (await fetch(spEndpoint() + "/health")).json();
+    $("#spBadge").textContent = "on";
+    $("#spStatus").innerHTML = `<span class="ok">Connected:</span> ${esc(j.model || "SymPointV2")} on ${esc(j.device || "?")}` +
+      (j.weights_loaded ? ` · weights ${(100 * j.weights_loaded).toFixed(0)}%` : "") + ".";
+  } catch (e) {
+    $("#spBadge").textContent = "off";
+    $("#spStatus").innerHTML = (quiet ? "" : "<b class='err'>Not reachable.</b> ") + spHelp(`No SymPointV2 service at ${spEndpoint()}.`);
+  }
+}
+function updateMethodUi() {
+  const both = !!(S.results.rules && S.results.sympoint);
+  $("#spPanel").style.display = S.method === "rules" && !S.results.sympoint ? "none" : "";
+  $("#showSwitch").style.display = both ? "" : "none";
+  for (const b of $$("#showSwitch [data-show]")) b.classList.toggle("active", b.dataset.show === S.show);
+  $("#tabCompareBtn").style.display = both ? "" : "none";
+  $("#spColourBox").style.display = S.results.sympoint ? "" : "none";
+  renderSpLegend();
+}
+function spLabels() { return S.results.sympoint && S.results.sympoint.sympoint; }
+function renderSpLegend() {
+  const sp = spLabels();
+  if (!sp || !SPC.colour) { $("#spLegend").innerHTML = ""; return; }
+  const used = new Set(Object.values(sp.entity_class).map((v) => v[0]));
+  $("#spLegend").innerHTML = "Line colours: " + sp.classes.map((c, i) => used.has(i)
+    ? `<span class="legendrow"><i style="background:rgb(${sp.colors[i].join(",")})"></i>${esc(c)}</span>` : "").join("");
+}
+
+async function renderCompare() {
+  try {
+    if (S.spAvailable && S.show) await call("sp_activate", { method: S.show });
+    const c = JSON.parse(await call("sp_compare"));
+    if (c.error) { $("#compare").innerHTML = `<p class="muted">${esc(c.error)}</p>`; return; }
+    let scores = null;
+    if (S.sampleRef) {
+      const ref = await (await fetch(BASE + "samples/" + S.sampleRef)).text();
+      scores = JSON.parse(await call("sp_evaluate_both", { reference: ref }));
+    }
+    const rows = Object.keys(c.rules).map((k) => `<tr><td>${esc(k.replace(/_/g, " "))}</td><td class="num">${c.rules[k]}</td><td class="num">${c.sympoint[k]}</td></tr>`).join("");
+    const keys = ["wall_precision", "wall_recall", "room_precision", "room_recall", "door_precision", "door_recall",
+      "window_precision", "window_recall", "column_precision", "column_recall", "manual_corrections_required"];
+    const scoreRows = scores ? keys.map((k) => {
+      const a = scores.rules[k], b = scores.sympoint[k];
+      const lowerBetter = k === "manual_corrections_required";
+      const cls = Math.abs(b - a) < 0.005 ? "" : ((b > a) !== lowerBetter ? "better" : "worse");
+      const f = (v) => Number.isInteger(v) ? v : (+v).toFixed(2);
+      return `<tr><td>${esc(k.replace(/_/g, " "))}</td><td class="num">${f(a)}</td><td class="num ${cls}">${f(b)}</td></tr>`;
+    }).join("") : "";
+    const sp = spLabels();
+    const groups = sp ? Object.entries(sp.summary.groups).map(([g, v]) => `${esc(g)} ${(100 * v).toFixed(0)}%`).join(", ") : "";
+    $("#compare").innerHTML = `
+      <p>Both methods ran on <b>${esc(S.fileName)}</b>. They share everything after the extraction (reconstruction, rooms, classification,
+        validation, export, 3D), so differences come from how walls, doors and windows were found. Use the
+        <b>Approach 1 / Approach 2</b> switch in the 2D toolbar to review, correct and export either result.</p>
+      ${scores ? `<h3>Scores against the reference geometry of this sample</h3>
+        <table class="grid cmp"><tr><th></th><th>approach 1 (rules)</th><th>approach 2 (SymPointV2)</th></tr>${scoreRows}</table>
+        <p class="small muted">Green / red: approach 2 better / worse than approach 1.</p>` : ""}
+      <h3>Result</h3><table class="grid"><tr><th></th><th>approach 1 (rules)</th><th>approach 2 (SymPointV2)</th></tr>${rows}
+        <tr><td>pipeline time (s)</td><td class="num">${c.timings.rules.toFixed(1)}</td><td class="num">${c.timings.sympoint.toFixed(1)}${sp && sp.model_seconds ? ` + ${sp.model_seconds} GPU` : ""}</td></tr></table>
+      <h3>Agreement (approach 1 used as the reference)</h3><table class="grid">${Object.entries(c.agreement).map(([k, v]) =>
+        `<tr><td>${esc(k)}</td><td class="num">${(100 * v).toFixed(0)}%</td></tr>`).join("")}</table>
+      <p class="small muted">Low agreement shows where to look; it does not say which method is right (no reference).</p>
+      ${sp ? `<h3>SymPointV2 labels</h3><p class="small">${esc(groups)} of the labelled line length · ${(100 * sp.summary.labelled_length_share).toFixed(0)}% of all lines labelled.
+        Tick <b>SymPointV2 classes</b> in the 2D toolbar to colour the drawing by class.</p>` : ""}`;
+  } catch (e) { $("#compare").innerHTML = `<p class="err">Comparison failed: ${esc(e.message)}</p>`; }
 }
 
 function load(data, keepView = false) {
@@ -256,7 +480,12 @@ function draw2d(keepView) {
     el("path", { class: `el room st-${r.status}`, d: polyD(r.polygon), "data-id": r.id, "fill-rule": "evenodd" }, gRooms);
   }
   const gD = el("g", { class: "dxf" }, world);
-  for (const l of v.lines) el("path", { d: pathD(l.p), "data-r": l.r, class: "role-" + l.k }, gD);
+  const spl = SPC.colour ? spLabels() : null;
+  for (const l of v.lines) {
+    const e = el("path", { d: pathD(l.p), "data-r": l.r, class: "role-" + l.k }, gD);
+    const lc = spl && spl.entity_class[l.r];
+    if (lc) e.setAttribute("style", `stroke:rgb(${spl.colors[lc[0]].join(",")});stroke-width:1.4`);
+  }
   const gT = el("g", { class: "dxftexts" }, world);
   for (const t of v.texts) {
     const tx = el("text", { class: "dxftext", x: t.p[0], y: -t.p[1], "font-size": Math.max(t.h, 0.12), "text-anchor": "middle" }, gT);
@@ -686,7 +915,11 @@ function renderInfo() {
     <h3>Layer semantics (hints)</h3><table class="grid"><tr><th>layer</th><th>hint</th><th>wall evidence</th><th>entities</th><th>parallel share</th></tr>
       ${Object.values(S.view.layers).filter((l) => Object.keys(l.entity_counts).length).map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.primary || "—")}</td><td class="num">${(+l.wall_evidence).toFixed(2)}</td><td class="mono small">${esc(JSON.stringify(l.entity_counts))}</td><td class="num">${(+l.parallel_share).toFixed(2)}</td></tr>`).join("")}</table>
     <h3>Block symbols</h3><div class="mono small">${esc(JSON.stringify(ctx.symbol_roles))}</div>
-    <h3>Stage logs</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
+    ${S.data.sympoint ? `<h3>Approach 2: SymPointV2 labels → elements</h3><table class="grid">
+      <tr><td>labelled share of line length</td><td>${(100 * S.data.sympoint.summary.labelled_length_share).toFixed(1)}%</td></tr>
+      <tr><td>groups</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.summary.groups))}</td></tr>
+      <tr><td>extraction</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.extract))}</td></tr></table>` : ""}
+    <h3>Stage logs (${esc(METHOD_NAME[S.show] || "")})</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
 }
 
 function levelsTable(b) {
@@ -725,7 +958,7 @@ async function renderBenchmark() {
 // ------------------------------------------------------------------ exports
 for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
   if (!S.model) return alert("Process a drawing first.");
-  const base = (S.fileName || "drawing").replace(/\.[^.]+$/, "");
+  const base = (S.fileName || "drawing").replace(/\.[^.]+$/, "") + (S.show === "sympoint" ? ".sympoint" : "");
   const kind = b.dataset.export;
   try {
     if (kind === "json") download(base + ".model.json", await call("export_json"), "application/json");

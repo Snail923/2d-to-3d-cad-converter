@@ -6,7 +6,8 @@ const INDEX_URL = _override || `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERS
 importScripts(INDEX_URL + "pyodide.js");
 
 let py = null;
-let bridge = null;
+let bridge = null;      // approach 1 (rules): architectural_converter.web_bridge
+let bridge2 = null;     // approach 2 (SymPointV2): sympoint_converter.web_bridge, loaded on first use
 
 function progress(msg) { self.postMessage({ type: "progress", msg }); }
 // called from Python (architectural_converter.web_bridge._progress) while a drawing is processed
@@ -27,7 +28,20 @@ async function init(base) {
   py.unpackArchive(zip, "zip", { extractDir: "/home/pyodide/engine" });
   py.runPython("import sys\nsys.path.insert(0, '/home/pyodide/engine')");
   bridge = py.pyimport("architectural_converter.web_bridge");
-  return { version: manifest.version, built: manifest.built, samples: manifest.samples };
+  return { version: manifest.version, built: manifest.built, samples: manifest.samples,
+           sympoint: !!manifest.sympoint };
+}
+
+function sp() {
+  if (!bridge2) bridge2 = py.pyimport("sympoint_converter.web_bridge");
+  return bridge2;
+}
+
+function writeInput(args) {
+  const name = (args.name || "input.dxf").replace(/[^A-Za-z0-9._-]/g, "_");
+  const path = "/tmp/" + name;
+  if (args.bytes) py.FS.writeFile(path, new Uint8Array(args.bytes));
+  return path;
 }
 
 function bytesOf(pyBytes) {
@@ -44,11 +58,26 @@ self.onmessage = async (ev) => {
     if (cmd === "init") {
       result = await init(args.base);
     } else if (cmd === "process") {
-      const name = (args.name || "input.dxf").replace(/[^A-Za-z0-9._-]/g, "_");
-      const path = "/tmp/" + name;
-      py.FS.writeFile(path, new Uint8Array(args.bytes));
+      const path = writeInput(args);
       result = bridge.process(path, args.corrections ? JSON.stringify(args.corrections) : null,
                               args.config ? JSON.stringify(args.config) : null);
+    } else if (cmd === "sp_request") {
+      result = sp().request(writeInput(args), args.config ? JSON.stringify(args.config) : null);
+    } else if (cmd === "sp_process") {
+      result = sp().process(writeInput(args), args.response, args.corrections ? JSON.stringify(args.corrections) : null,
+                            args.config ? JSON.stringify(args.config) : null);
+    } else if (cmd === "sp_rerun") {
+      result = sp().rerun(JSON.stringify(args.corrections));
+    } else if (cmd === "sp_remember") {
+      sp().remember(args.method);
+    } else if (cmd === "sp_activate") {
+      result = sp().activate(args.method);
+    } else if (cmd === "sp_reset") {
+      sp().reset();
+    } else if (cmd === "sp_compare") {
+      result = sp().compare();
+    } else if (cmd === "sp_evaluate_both") {
+      result = sp().evaluate_both(args.reference);
     } else if (cmd === "rerun") {
       result = bridge.rerun(JSON.stringify(args.corrections));
     } else if (cmd === "export_json") {

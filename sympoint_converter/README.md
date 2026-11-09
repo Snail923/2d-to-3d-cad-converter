@@ -76,6 +76,7 @@ python -m sympoint_converter compare samples/real/apartment-building-plan.dxf -o
 | `build <dxf>` | approach 2 only: the full model | `<name>.sympoint.model.json`, `.model.sqlite`, `.glb`, `.report.html`, `.overlay.svg`, labels viewer `.html` |
 | `label <dxf>` | raw labels only (step 1), optionally `--tile-m 15 20 30` | `<name>.sympoint.html` viewer, `.labels.json` |
 | `server status` / `stop` / `start` / `log` | the background service | log in `~/.cache/sympoint_converter/server.log` |
+| `web` | the web app with both methods (see below) | `http://127.0.0.1:8000` |
 
 Options: `--url http://host:8790` uses a service you started yourself (on this or another machine, no
 autostart); `--no-cache` asks the model again; `--response resp.json` uses an offline answer (see below);
@@ -88,6 +89,28 @@ Settings for the service are under `service` in `config.json` (`SYMPOINT_HOME`, 
 **Offline** (GPU on another machine): `label drawing.dxf -o out/ --offline` writes the request JSON; on the GPU
 machine run `python sympoint_server.py --config ... --checkpoint ... --in request.json --out resp.json`; then
 `build drawing.dxf --response resp.json -o out/` (or `label` / `compare` with `--response`).
+
+## Web app: choose the method in the browser
+
+```bash
+python -m sympoint_converter web
+```
+
+builds the web app when needed, starts the SymPointV2 service, serves the page on `http://127.0.0.1:8000` and
+opens it. In the header choose **Method**:
+
+* **Approach 1 · rules**: runs entirely in the browser (as before, no GPU needed),
+* **Approach 2 · SymPointV2**: the page cuts the drawing into tiles in the browser, sends them to the service on
+  your computer (address and tile size in the *SymPointV2 service* panel; nothing leaves your machine) and builds
+  the model from the labels with the same engine,
+* **Compare both**: runs both. A **Compare** tab shows counts, agreement and, for the benchmark samples, the
+  scores of both against the reference; the **Approach 1 / Approach 2** switch in the 2D toolbar chooses which
+  result you review, correct, re-run and export (exports of approach 2 are named `*.sympoint.*`).
+
+*SymPointV2 classes* (2D toolbar) colours the drawing's lines by the class the model gave them. Changing the method
+after a drawing is loaded runs only what is missing; labels are kept for the drawing while the page is open.
+The published GitHub Pages site has the same selector: it works with the service running on your computer
+(`python -m sympoint_converter server start`), as browsers allow pages to call `127.0.0.1`.
 
 ## 3. How labels become walls, doors and windows (`extract.py`)
 

@@ -9,13 +9,20 @@
 </head>
 <body>
 <header>
-  <div class="brand">2D → 3D CAD Converter <span class="sub">deterministic DXF architectural extraction</span></div>
+  <div class="brand">2D → 3D CAD Converter <span class="sub">DXF architectural extraction · two methods</span></div>
   <div class="actions">
     <label class="btn primary" title="Open a DXF drawing (DWG must be converted to DXF first)">
       Open DXF…<input id="file" type="file" accept=".dxf,.DXF,.dwg,.DWG" hidden>
     </label>
     <select id="sample"><option value="">— or pick a sample drawing —</option></select>
     <button id="loadSample" class="btn">Load sample</button>
+    <label class="method" title="How walls, doors and windows are extracted. The rest of the pipeline (reconstruction, rooms, validation, export, 3D) is the same for both.">
+      Method <select id="method">
+        <option value="rules">Approach 1 · rules (in the browser)</option>
+        <option value="sympoint">Approach 2 · SymPointV2 (local GPU)</option>
+        <option value="compare">Compare both</option>
+      </select>
+    </label>
   </div>
   <div id="status" class="status">Starting…</div>
 </header>
@@ -37,6 +44,7 @@
       <button data-tab="tab2d" class="active">2D review</button>
       <button data-tab="tab3d">3D model</button>
       <button data-tab="tabIssues">Validation <span id="issueCount" class="badge">0</span></button>
+      <button data-tab="tabCompare" id="tabCompareBtn" style="display:none">Compare</button>
       <button data-tab="tabInfo">Drawing info</button>
       <button data-tab="tabBench">Benchmark</button>
     </nav>
@@ -49,6 +57,9 @@
         <button class="tool" data-tool="room" title="Click room corners; double-click or Enter to finish">Draw room</button>
         <label class="small">thickness (m) <input id="thick" type="number" step="0.01" min="0" placeholder="unknown" value="0.15"></label>
         <span class="sep"></span>
+        <span id="showSwitch" class="seg" style="display:none" title="Both methods ran: choose which result to review, edit and export">
+          <button data-show="rules">Approach 1</button><button data-show="sympoint">Approach 2</button></span>
+        <label id="spColourBox" class="small" style="display:none" title="Colour the drawing's lines by the class SymPointV2 gave them"><input type="checkbox" id="spColour"> SymPointV2 classes</label>
         <button id="fit" class="btn small">Fit</button>
         <span id="cursor" class="small mono"></span>
       </div>
@@ -76,6 +87,7 @@
       </div>
       <table id="issues" class="grid"></table>
     </div>
+    <div id="tabCompare" class="tab scroll"><div id="compare"></div></div>
     <div id="tabInfo" class="tab scroll"><div id="info"></div></div>
     <div id="tabBench" class="tab scroll"><div id="bench"></div></div>
   </section>
@@ -88,6 +100,19 @@
     <details open>
       <summary>Selection</summary>
       <div id="details" class="details"><span class="muted">Click a wall, opening, room, column or hypothesis.</span></div>
+    </details>
+    <details open id="spPanel" style="display:none">
+      <summary>SymPointV2 service <span id="spBadge" class="badge">?</span></summary>
+      <div class="corr">
+        <p class="small muted">Approach 2 sends the drawing's lines to SymPointV2 running on <b>your GPU</b> (nothing leaves your computer).
+          Start it once in a terminal: <code>python -m sympoint_converter server start</code>
+          (or use <code>python -m sympoint_converter web</code>, which also opens this page).</p>
+        <div class="aigrid small"><label>address <input id="spEndpoint" type="text" spellcheck="false"></label>
+          <label>tile size (m) <input id="spTile" type="number" step="1" min="5" max="60"></label></div>
+        <div class="row"><button id="spTest" class="btn small">Test connection</button></div>
+        <div id="spStatus" class="small"></div>
+        <div id="spLegend" class="small"></div>
+      </div>
     </details>
     <details open>
       <summary>Manual corrections <span id="corrCount" class="badge">0</span></summary>
@@ -128,8 +153,8 @@
     </details>
   </aside>
 </main>
-<footer class="small muted">Phase 1: ingestion → preprocessing → semantic context → detectors → resolver → reconstruction → topology → classification → validation → export · Phase 2: Shapely + Trimesh 3D.
-  No machine learning: every decision is a deterministic rule with recorded evidence. <span id="build"></span></footer>
+<footer class="small muted">Approach 1: ingestion → preprocessing → context → rule-based detectors → resolver; approach 2: the same front end → SymPointV2 labels → walls / openings from the labels.
+  Both then: reconstruction → topology → classification → validation → export · 3D with Shapely + Trimesh. <span id="build"></span></footer>
 <script type="module" src="app.js"></script>
 </body>
 </html>

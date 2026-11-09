@@ -120,3 +120,17 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 .loadlog { text-align: left; max-height: 180px; overflow: auto; margin: 10px 0; padding-left: 22px; color: #4a5168; }
 .loadlog li.done { color: #9aa0b1; }
 #loadingTime { margin-top: 6px; color: #3a6df0; }
+
+/* method selection (approach 1 rules / approach 2 SymPointV2 / compare) */
+.method { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid #c8cbd3; border-radius: 6px; overflow: hidden; }
+.seg button { border: none; background: #fff; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid #c8cbd3; }
+.seg button.active { background: #1f2a44; color: #fff; }
+.aigrid { display: grid; gap: 4px; margin: 6px 0; }
+.aigrid input { width: 100%; padding: 4px 6px; border: 1px solid #c8cbd3; border-radius: 5px; font: inherit; }
+.corr code { font-size: 11px; background: #eef1f7; padding: 1px 4px; border-radius: 3px; }
+.ok { color: #2e7d32; } .err { color: #c62828; }
+table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { color: #c62828; }
+.legendrow { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 2px 0; }
+.legendrow i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }

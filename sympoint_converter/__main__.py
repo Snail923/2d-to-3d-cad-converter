@@ -8,6 +8,7 @@ The local SymPointV2 service is started automatically in the background when a c
     python -m sympoint_converter compare --benchmark -o out/         # ... on the 13 benchmark drawings (with scores)
     python -m sympoint_converter label drawing.dxf -o out/           # raw labels viewer (step 1)
     python -m sympoint_converter server start | stop | status | log
+    python -m sympoint_converter web                                  # web app with both methods (opens the browser)
 
 ``--url`` uses a service you started yourself (no autostart); ``--response`` an offline answer.
 """
@@ -188,6 +189,83 @@ def cmd_compare(a):
     return 0
 
 
+# ------------------------------------------------------------------ web app (both methods)
+def _site_outdated(root, site) -> bool:
+    man = os.path.join(site, "build_manifest.json")
+    if not os.path.exists(man):
+        return True
+    try:
+        with open(man, encoding="utf-8") as fh:
+            if not json.load(fh).get("sympoint"):
+                return True
+    except (OSError, ValueError):
+        return True
+    built = os.path.getmtime(man)
+    for pkg in ("web", "architectural_converter", "sympoint_converter"):
+        for dp, _, fs in os.walk(os.path.join(root, pkg)):
+            if "__pycache__" in dp:
+                continue
+            for f in fs:
+                if f.endswith((".py", ".json", ".js", ".html", ".css")) and os.path.getmtime(os.path.join(dp, f)) > built:
+                    return True
+    return False
+
+
+def cmd_web(a):
+    import functools
+    import shutil
+    import subprocess
+    import webbrowser
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from .service_manager import ensure_running, state_dir
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    builder = os.path.join(root, "scripts", "build_site.py")
+    site = os.path.abspath(a.site or os.path.join(root, "site"))
+    if not os.path.exists(builder):
+        print(f"scripts/build_site.py not found next to the package ({root}): run this from a clone of the repository.",
+              file=sys.stderr)
+        return 2
+    if a.rebuild or _site_outdated(root, site):
+        print("building the web app (both methods) ...")
+        cmd = [sys.executable, builder, "--out", site]
+        if not a.with_benchmark:
+            cmd.append("--skip-benchmark")
+        wheels = os.path.join(site, "wheels")
+        if os.path.isdir(wheels) and glob.glob(os.path.join(wheels, "*.whl")):     # reuse, no download
+            keep = os.path.join(state_dir(), "wheels")
+            shutil.rmtree(keep, ignore_errors=True)
+            shutil.copytree(wheels, keep)
+            cmd += ["--wheels-from", keep]
+        subprocess.check_call(cmd, cwd=root)
+    cfg = load_config()
+    if not a.no_gpu:
+        try:
+            ensure_running(cfg)
+        except (ServiceError, ServiceSetupError) as e:
+            print(f"Approach 2 is not available until the SymPointV2 service runs:\n{e}\n"
+                  "(approach 1 works anyway)", file=sys.stderr)
+    class Quiet(SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+    handler = functools.partial(Quiet, directory=site)
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), handler)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    print(f"web app: {url}  (Ctrl+C stops the web server; the GPU service keeps running: "
+          "python -m sympoint_converter server stop)")
+    if not a.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="sympoint_converter", description="Approach 2: SymPointV2 learned extraction")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -230,10 +308,18 @@ def main(argv=None):
     c.add_argument("--tile-m", type=float)
     c.add_argument("--benchmark", action="store_true", help="add the 13 benchmark drawings (scored against references)")
 
+    w = sub.add_parser("web", help="serve the web app with both methods (starts the GPU service, opens the browser)")
+    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--site", help="site directory (default: <repo>/site, built when missing or outdated)")
+    w.add_argument("--rebuild", action="store_true", help="rebuild the site")
+    w.add_argument("--with-benchmark", action="store_true", help="also run the benchmark for the Benchmark tab when building")
+    w.add_argument("--no-gpu", action="store_true", help="do not start the SymPointV2 service")
+    w.add_argument("--no-browser", action="store_true")
+
     a = ap.parse_args(argv)
     try:
         return {"server": cmd_server, "health": cmd_health, "label": cmd_label, "build": cmd_build,
-                "compare": cmd_compare}[a.cmd](a)
+                "compare": cmd_compare, "web": cmd_web}[a.cmd](a)
     except (ServiceError, ServiceSetupError) as e:
         print(e, file=sys.stderr)
         return 1

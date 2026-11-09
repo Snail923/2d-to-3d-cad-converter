@@ -23,7 +23,9 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 | **Approach 1** | `architectural_converter/` | geometry, graph topology and rules only (this README) | complete |
 | **Approach 2** | `sympoint_converter/` | the learned model [SymPointV2](https://github.com/nicehuster/SymPointV2) labels every DXF line (wall, door types, window, curtain wall, stairs, furniture, ...); walls, doors, windows, columns and stairs are built from the labels, then approach 1's reconstruction, rooms, classification, validation, export and 3D run unchanged | complete; `python -m sympoint_converter compare <dxf>` runs both side by side (the GPU service starts by itself) |
 
-Approach 2 reuses only approach 1's DXF reading and unit normalisation; approach 1 never imports approach 2.
+Approach 2 reuses approach 1's DXF front end and build stages; approach 1 never imports approach 2.
+In the web app, choose **Method** in the header: approach 1, approach 2 (needs the SymPointV2 service on your
+computer) or **Compare both**. `python -m sympoint_converter web` starts the service and opens the app locally.
 Setup (local NVIDIA GPU, no change to the system CUDA) and usage: [sympoint_converter/README.md](sympoint_converter/README.md).
 
 ## Try it
