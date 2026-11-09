@@ -16,8 +16,14 @@
     "home": "~/sympointv2",
     "env": "sympoint",
     "python": null,
-    "config": ["svg_pointT_release.yaml", "configs/svg/svg_pointT.yaml"],
-    "checkpoint": ["weights.pth", "best.pth"],
+    "config": [
+      "svg_pointT_release.yaml",
+      "configs/svg/svg_pointT.yaml"
+    ],
+    "checkpoint": [
+      "weights.pth",
+      "best.pth"
+    ],
     "autostart": true,
     "start_timeout_s": 240,
     "sync_server": true
@@ -26,11 +32,20 @@
     "_doc": "Turning labels into walls / openings / columns / stairs (see extract.py).",
     "min_wall_share": 0.5,
     "min_face_length_m": 0.05,
-    "wall_thickness_m": [0.04, 0.9],
-    "plausible_thickness_m": [0.07, 0.6],
+    "wall_thickness_m": [
+      0.04,
+      0.9
+    ],
+    "plausible_thickness_m": [
+      0.07,
+      0.6
+    ],
     "parallel_deg": 1.0,
     "min_overlap_m": 0.05,
-    "column_size_m": [0.15, 1.5],
+    "column_size_m": [
+      0.15,
+      1.5
+    ],
     "short_piece_factor": 1.0,
     "single_line_max_paired_share": 0.3,
     "single_line_min_length_m": 0.3,
@@ -39,22 +54,49 @@
     "min_instance_score": 0.5,
     "host_search_m": 0.6,
     "unhosted_doors": false,
-    "door_width_m": [0.45, 3.6],
-    "window_width_m": [0.3, 8.0],
+    "door_width_m": [
+      0.45,
+      3.6
+    ],
+    "window_width_m": [
+      0.3,
+      8.0
+    ],
     "stair_cluster_gap_m": 0.4,
     "min_tread_m": 0.5,
     "min_treads": 3,
-    "going_m": [0.15, 0.5]
+    "going_m": [
+      0.15,
+      0.5
+    ],
+    "railing_thickness_m": [
+      0.02,
+      0.35
+    ],
+    "railing_min_length_m": 0.3
   },
   "engine_overrides": {
     "_doc": "Merged into approach 1's configuration for the shared build stages: weights of the evidence approach 2 produces (approach 1's own config files are not changed).",
     "detection": {
       "weights": {
-        "wall": {"sympoint_label": 2.5, "sympoint_faces": 1.0, "sympoint_thickness": 0.6},
-        "door": {"sympoint_label": 3.0},
-        "window": {"sympoint_label": 3.0},
-        "column": {"sympoint_label": 2.0},
-        "stair": {"sympoint_label": 2.0, "sympoint_regularity": 1.0}
+        "wall": {
+          "sympoint_label": 2.5,
+          "sympoint_faces": 1.0,
+          "sympoint_thickness": 0.6
+        },
+        "door": {
+          "sympoint_label": 3.0
+        },
+        "window": {
+          "sympoint_label": 3.0
+        },
+        "column": {
+          "sympoint_label": 2.0
+        },
+        "stair": {
+          "sympoint_label": 2.0,
+          "sympoint_regularity": 1.0
+        }
       }
     }
   }

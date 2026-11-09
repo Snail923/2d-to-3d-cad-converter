@@ -89,6 +89,7 @@ class Extractor:
     def run(self) -> dict:
         walls, wall_faces = self.straight_walls()
         walls += self.arc_walls()
+        walls += self.railings()
         columns = self.columns(walls)
         doors, windows = self.openings(walls)
         stairs = self.stairs()
@@ -264,6 +265,73 @@ class Extractor:
                     out.append(w)
             walls = out
         return walls
+
+    # ------------------------------------------------------------------ balcony railings
+    def railings(self):
+        """Railing-labelled lines (balcony / gallery edges): pairs of parallel lines a few cm apart,
+        else single lines. They carry ``railing_label`` evidence, which the shared balcony detection
+        reads (a balcony wall = a low parapet with glass above it in 3D)."""
+        c = self.c
+        tmin, tmax = c["railing_thickness_m"]
+        strokes = self.ctx.strokes
+        R = []
+        for k, st in enumerate(strokes):
+            if st.length < c["railing_min_length_m"]:
+                continue
+            n, hit, sc = 0, 0, []
+            for rid in st.raw_ids:
+                n += 1
+                g, s_ = self.group_of_raw(rid)
+                if g == "railing":
+                    hit += 1
+                    sc.append(s_)
+            if n and hit / n >= c["min_wall_share"]:
+                R.append((k, float(np.mean(sc))))
+        pairs = []
+        for a in range(len(R)):
+            for b in range(a + 1, len(R)):
+                i, j = R[a][0], R[b][0]
+                si, sj = strokes[i], strokes[j]
+                if abs(si.u[0] * sj.u[1] - si.u[1] * sj.u[0]) > math.sin(math.radians(c["parallel_deg"])):
+                    continue
+                d = abs(dot(((sj.p0[0] + sj.p1[0]) / 2, (sj.p0[1] + sj.p1[1]) / 2), _n(si.u)) - si.c)
+                pj = sorted((dot(sj.p0, si.u), dot(sj.p1, si.u)))
+                lo, hi = max(si.s0, pj[0]), min(si.s1, pj[1])
+                if tmin <= d <= tmax and hi - lo >= 0.5 * min(si.length, sj.length):
+                    pairs.append((d, a, b, lo, hi))
+        pairs.sort()
+        used, out = set(), []
+        score = dict(R)
+        for d, a, b, lo, hi in pairs:
+            if a in used or b in used:
+                continue
+            used |= {a, b}
+            si, sj = strokes[R[a][0]], strokes[R[b][0]]
+            cj = dot(((sj.p0[0] + sj.p1[0]) / 2, (sj.p0[1] + sj.p1[1]) / 2), _n(si.u))
+            w = Wall(id="", kind="straight", u=si.u, c=(si.c + cj) / 2, s0=lo, s1=hi, thickness=d,
+                     thickness_source="measured", detected_interval=(lo, hi))
+            w.source_entities = set(si.raw_ids) | set(sj.raw_ids)
+            w.add_evidence("sympoint_faces", 1.0)
+            w.add_evidence("sympoint_label", (score[R[a][0]] + score[R[b][0]]) / 2)
+            w.add_evidence("railing_label", (score[R[a][0]] + score[R[b][0]]) / 2)
+            out.append(w)
+        for a, (k, sc) in enumerate(R):
+            if a in used:
+                continue
+            st = strokes[k]
+            w = Wall(id="", kind="centerline", u=st.u, c=st.c, s0=st.s0, s1=st.s1, thickness=None,
+                     thickness_source="unknown", detected_interval=(st.s0, st.s1))
+            w.source_entities = set(st.raw_ids)
+            w.add_evidence("sympoint_faces", 0.5)
+            w.add_evidence("sympoint_label", sc)
+            w.add_evidence("railing_label", sc)
+            out.append(w)
+        for w in out:
+            w.id = self.ids.new("wall")
+            w.detection_methods.add("sympoint_railing")
+            w.notes.append("SymPointV2: railing (balcony / gallery edge)")
+        self.log["railings"] = len(out)
+        return out
 
     # ------------------------------------------------------------------ curved walls
     def arc_walls(self):

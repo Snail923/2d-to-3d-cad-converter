@@ -124,6 +124,20 @@ the pipeline.
   kept only if it encloses a new plausible room, and gains confidence when it captures an orphan label. It is output
   as a hypothesis wall and room (≤ 0.5 confidence, NEEDS_REVIEW) and is never added silently.
 
+* **Doors need walls** (`topology/door_rules.py`, `reconstruction.json` → `door_rules`). A door is always set in a
+  wall, and a space with a door is a room:
+  1. *door line* (before room detection): along the line of every door, on both sides, the wall must continue to
+     the next crossing wall (up to `max_gap_m`). Missing pieces are added as walls; an unhosted door is hosted in
+     them. A door without host and without any wall of its own line nearby is skipped (its line is not reliable);
+  2. *room with a door* (after missing-room recovery): a hypothesis that encloses space which is **not a room yet**
+     and has a door on its boundary becomes a wall (one per enclosed area, along / across the wall it continues),
+     then rooms are detected again. Hypotheses that would split an existing room (open plan) are not promoted.
+  Added walls are NEEDS_REVIEW with the door named in their reason; one that ends up bounding no room is rejected.
+* **Ground** (`topology/ground.py`, `phase2.json` → `ground`): the building outline, closed over notches up to
+  2 × `close_m` wide (an open room whose facade is missing), minus rooms, walls and columns. Every remaining area
+  ≥ `min_area_m2` gets a `floor_without_room` validation warning and a *ground* floor slab in 3D, so no part of
+  the building is without a floor.
+
 * **Floor levels** (`topology/level_analysis.py`, `config/levels.json`): permit sets usually draw every floor side
   by side on one sheet. Accepted walls are clustered into views (separated by ≥ `view_gap_m`). Each view reads its
   own texts: finished-floor levels ("708.75 F.F.L", "FFL +3.35", "±0.00"), level names ("GROUND FLOOR PLAN",
@@ -160,7 +174,8 @@ it gives a plausible rise. Otherwise the default rise. Phase 2 builds stepped so
   thickness limit derived from the drawing's own thickness classes. Openings are exterior or interior. Columns are
   engaged or free-standing. Rooms are typed from labels first, then geometry (corridor, service room).
   A wall running inside an exterior wall's body (duplicate / second facade line) is exterior too.
-* **Balconies** (`classification/balcony.py`): *railing elements* are exterior walls clearly lighter than the
+* **Balconies** (`classification/balcony.py`): *railing elements* are exterior walls recognised as railings by a
+  detector (`railing_label` evidence, e.g. SymPointV2's railing class) or clearly lighter than the
   drawing's own facade (≤ `railing_max_rel_thickness` × length-weighted exterior thickness, or single lines), or on a
   balcony / terrace / railing / parapet layer. A room is a balcony when ≥ `min_outline_share` of its edge is on the
   building outline, railing elements make up ≥ `min_railing_share` of that part (thin lines running inside a thicker
@@ -199,3 +214,8 @@ class MyWallDetector(BaseDetector):
 ```
 Add its name to `enabled_detectors` and the weights of any new evidence features to `config/detection.json`. Then
 add it to the resolver's wall list if it produces walls.
+
+## Balcony walls in 3D
+A wall classified `railing` (the edge of a balcony) is a **low solid parapet** of `balcony_parapet_height_m`
+(0.5 m) with **glass above it** up to `railing_height_m` (1.1 m); both in `phase2.json`. The glass is a separate
+mesh (`<wall id>_glass`, type `window`), so the 3D viewer's *glazing* toggle hides it.

@@ -264,6 +264,8 @@ class ExtractionPipeline:
         th = cfg["detection"]["status_thresholds"]
         gate = cfg["detection"].get("gates", {}).get("wall")
         for w in live:
+            if "door_implied" in w.detection_methods and w.manual_status is None:
+                continue                      # added by the door rules: keeps its own confidence
             w.score(ww, th, gate)
         for kind, coll in (("door", st.doors), ("window", st.windows)):
             for o in coll:
@@ -271,6 +273,9 @@ class ExtractionPipeline:
                     o.add_evidence("host_wall", 0.0)
                 o.score(cfg["detection"]["weights"][kind], th)
         openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
+        # a door is always in a wall: complete the wall on the line of every door
+        from ..topology.door_rules import complete_door_walls, promote_door_rooms
+        dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids)
         live = [w for w in walls if w.status != Status.REJECTED]
         # walls whose openings were all rejected stay closed; rejected openings detach from hosts
         for w in walls:
@@ -292,6 +297,9 @@ class ExtractionPipeline:
         apply_status_overrides(rooms, st.corrections)
         live_rooms = [r for r in rooms if r.status != Status.REJECTED]
         G_rooms = relate_rooms(live_rooms, live, openings, tol)
+        from ..topology.door_rules import drop_unused
+        dlog["unused_rejected"] = drop_unused(walls, live_rooms)
+        live = [w for w in walls if w.status != Status.REJECTED]
         if cfg["runtime"].get("safe_mode"):
             hyps, hrooms, hlog = [], [], {"skipped": "safe mode"}
             st.drawing.issues.append({"stage": "topology", "severity": "warning",
@@ -299,6 +307,18 @@ class ExtractionPipeline:
         else:
             self._report("Step 7/10: missing-room recovery")
             hyps, hrooms, hlog = recover_missing_rooms(walls, st.columns, live_rooms, st.ctx.labels, tol, cfg, st.ctx.ids, rd)
+            if not getattr(st, "_door_room_pass", False):
+                promoted = promote_door_rooms(hyps, hrooms, openings, tol, cfg, st.ctx.ids, live_rooms, walls)
+                if promoted:
+                    # a room with a door needs all its walls: the closing hypotheses become walls,
+                    # and rooms are detected again with them
+                    st.walls = walls + promoted
+                    st._door_room_pass = True
+                    st.logs["door_rules_first_pass"] = {"door_line": dlog, "room_walls_promoted": [h.id for h in promoted]}
+                    try:
+                        return self._stage_topology(st)
+                    finally:
+                        st._door_room_pass = False
         G_axis = build_axis_graph(live, tol)
         max_t = max([w.thickness or 0.0 for w in live] + [tol.snap * 4])  # shorter dangling pieces are junction overshoots
         b = Building()
@@ -319,7 +339,9 @@ class ExtractionPipeline:
                     p2["wall_height_m"] + p2["slab_thickness_m"])
         st.building = b
         st.solid = solid
-        st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "wall_graph_components": _ncomp(G_walls),
+        st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "door_rules": dlog,
+                               "door_room_walls": st.logs.get("door_rules_first_pass", {}).get("room_walls_promoted", []),
+                               "wall_graph_components": _ncomp(G_walls),
                                "axis_graph": {"nodes": G_axis.number_of_nodes(), "edges": G_axis.number_of_edges(),
                                               "dangling_nodes": sum(1 for n in G_axis.nodes if G_axis.degree(n) == 1
                                                                    and next(iter(G_axis.edges(n, data=True)))[2]["length"] > max_t)}}
@@ -402,7 +424,38 @@ class ExtractionPipeline:
             rep.add("room", "missing_boundary_hypothesis", "warning", h, (c.x, c.y),
                     f"Proposed missing wall {h.id}: {h.status_reason}.",
                     "Accept the hypothesis if the wall exists, otherwise ignore it.", h.confidence)
+        self._check_ground(st, rep)
         st.report = rep
+
+    def ground_pieces(self, st):
+        """Areas inside the building (outline closed over small notches) without a room floor."""
+        from shapely.geometry import box as _box
+        from ..topology.ground import unassigned_floor
+        gc = self.cfg["phase2"].get("ground", {})
+        b = st.building
+        if not gc.get("enabled", True) or b is None or getattr(b, "footprint", None) is None:
+            return []
+        from ..geometry.geometric_utils import polygons_of
+        live = lambda e: e.status != Status.REJECTED  # noqa: E731
+        cover = [r.polygon for r in b.rooms.values() if live(r) and r.polygon is not None]
+        cover += [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis]
+        cover += [c.polygon for c in b.columns.values() if live(c) and c.polygon is not None]
+        pieces = unassigned_floor(polygons_of(b.footprint), [g for g in cover if g is not None],
+                                  gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
+        if b.levels:                                   # stacked permit set: floor plan views only
+            plans = [_box(*lv.bbox) for lv in b.levels if lv.kind == "floor_plan"]
+            pieces = [p for p in pieces if any(bx.contains(p.representative_point()) for bx in plans)]
+        return pieces
+
+    def _check_ground(self, st, rep):
+        pieces = self.ground_pieces(st)
+        for p in pieces:
+            c = p.representative_point()
+            rep.add("room", "floor_without_room", "warning", None, (c.x, c.y),
+                    f"{p.area:.1f} m² inside the building is not part of any room (no floor from a room): "
+                    "a wall may be missing, or the space was not recognised as a room.",
+                    "Add the missing wall or draw the room; the 3D model fills it with a ground slab.", 0.6, set())
+        st.logs["ground"] = {"unassigned_floor_pieces": len(pieces), "area_m2": round(sum(p.area for p in pieces), 2)}
 
     def _stage_export(self, st):
         from .database_exporter import build_model

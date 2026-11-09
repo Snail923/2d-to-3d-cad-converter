@@ -7,7 +7,8 @@ re-typed as closet doors, and the 3D model shows a closed box with full-height w
 
 The decision is made from evidence that any drawing provides, never from coordinates:
 
-* **railing elements** - walls on the building outline (exterior) that are clearly lighter than
+* **railing elements** - walls on the building outline (exterior) recognised as railings by a
+  detector (``railing_label`` evidence, e.g. SymPointV2's railing class), or clearly lighter than
   the drawing's own facade walls (thickness <= ``railing_max_rel_thickness`` x the length-
   weighted exterior wall thickness, or drawn as a single line), or whose source layers say
   balcony / terrace / railing / parapet (``layer_semantics.json`` category ``balcony``);
@@ -20,7 +21,8 @@ The decision is made from evidence that any drawing provides, never from coordin
 Consequences, all recorded in notes / evidence:
 
 * the room is classified ``balcony`` (open: no ceiling, its floor is outside);
-* its railing walls become ``railing`` (Phase 2 builds them at ``railing_height_m``);
+* its railing walls become ``railing``: Phase 2 builds a balcony wall as a low solid parapet
+  (``balcony_parapet_height_m``) with glass above it up to ``railing_height_m``;
 * walls between the balcony and an indoor room are the real facade: ``exterior_wall``. So the
   windows in them stay windows and the doors to the balcony are exterior doors.
 """
@@ -121,6 +123,8 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
         lay = _layer_balcony_score(w, drawing, sem)
         if lay >= 0.5:
             ev = max(ev, lay)
+        if w.evidence.get("railing_label", 0.0) >= 0.5:
+            ev = max(ev, w.evidence["railing_label"])     # a detector recognised the railing itself
         if not w.thickness or w.kind == "centerline":
             ev = max(ev, 0.7)                         # single line on the outline: rail / parapet line
         elif t_ext and w.thickness <= rel * t_ext:

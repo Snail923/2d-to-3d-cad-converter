@@ -218,3 +218,40 @@ def test_approach_1_is_unchanged_by_approach_2_config():
     assert sp.cfg["detection"]["weights"]["wall"]["parallelism"] == base["detection"]["weights"]["wall"]["parallelism"]
     assert Status.ACCEPTED.value == "ACCEPTED"
     subprocess.run([sys.executable, "-c", "import architectural_converter.pipeline.extraction_pipeline"], check=True, cwd=ROOT)
+
+
+def test_railing_labels_make_a_balcony_with_glass_above_a_low_parapet(tmp_path):
+    """SymPointV2 labels the balcony edge 'railing': approach 2 builds railing walls, the shared
+    balcony detection classifies the space as a balcony, and 3D shows a low parapet + glass."""
+    from architectural_converter.reconstruction3d import build_3d
+    from sympoint_converter.sympoint_io import primitives
+    from tests.integration.test_doors_furniture_balcony_stairs import _balcony_plan
+    path = str(tmp_path / "balcony.dxf")
+    _balcony_plan().saveas(path)
+    cfg = load_config()
+    d = load_drawing(path)
+    prims = primitives(d, cfg)
+    req = export_tiles(d, cfg, prims)
+
+    def label(k):
+        P = d.transform.inverse(prims[k][3].tolist())
+        x, y = sum(p[0] for p in P) / len(P), sum(p[1] for p in P) / len(P)
+        if x < 4.2 and y > 5.25:
+            return "railing"
+        return ORACLE.get(prims[k][1])
+    tiles = [{"id": t["id"], "instances": [],
+              "semantic": [[CLASSES.index(c), 0.95, 1.0] if (c := label(k)) else [32, 0.1, 0.05] for k in t["pidx"]]}
+             for t in req["tiles"]]
+    pipe = SymPointPipeline(cfg, response={"tiles": tiles}, labels_progress=lambda m: None)
+    st = pipe.process(path)
+    rails = [w for w in st.building.walls.values() if w.status != Status.REJECTED and "sympoint_railing" in w.detection_methods]
+    assert rails and st.logs["detect"]["railings"] >= 3
+    assert [r for r in st.building.rooms.values() if r.status != Status.REJECTED and r.classification == "balcony"]
+    railing = {w.id for w in st.building.walls.values() if w.classification == "railing"}
+    assert railing and railing <= {w.id for w in rails}
+    m3 = build_3d(st.model, pipe.cfg)
+    parapets = [m for m in m3.meshes if m["id"] in railing and m["type"] == "wall"]
+    glass = [m for m in m3.meshes if m["id"].removesuffix("_glass") in railing and m["type"] == "window"]
+    assert parapets and len(glass) == len(parapets)
+    assert all(m["vertices"][:, 2].max() < 0.6 for m in parapets)
+    assert all(m["vertices"][:, 2].max() > 1.0 for m in glass)

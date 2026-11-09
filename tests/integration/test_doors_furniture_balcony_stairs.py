@@ -133,8 +133,12 @@ def test_balcony_with_railing_is_open_and_its_facade_is_exterior():
     assert not [i for i in st.report.issues if i.code == "no_access"]
     m3 = build_3d(st.model, PipelineConfig())
     rail_ids = {w.id for w in railings}
+    # balcony wall = a low solid parapet with glass above it up to the railing height
     tops = [m["vertices"][:, 2].max() for m in m3.meshes if m["id"] in rail_ids]
-    assert tops and all(abs(z - 1.1) < 1e-6 for z in tops)
+    assert tops and all(abs(z - 0.5) < 1e-6 for z in tops)
+    glass = [m for m in m3.meshes if m["id"].removesuffix("_glass") in rail_ids and m["type"] == "window"]
+    assert len(glass) == len(tops)
+    assert all(abs(m["vertices"][:, 2].min() - 0.5) < 1e-6 and abs(m["vertices"][:, 2].max() - 1.1) < 1e-6 for m in glass)
     assert "railing_height_m" in m3.metadata["defaults_used"]
 
 

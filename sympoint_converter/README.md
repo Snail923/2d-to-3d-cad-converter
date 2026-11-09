@@ -122,9 +122,12 @@ The published GitHub Pages site has the same selector: it works with the service
 | doors | model instances of a door class, else clusters of door-labelled lines split by their swing arcs. Hinge = arc centre; the chord runs from the hinge along the wall the closed leaf lies in (not the wall the open leaf rests against); two arcs leaf to leaf = double door. Without arc (sliding / folding): the extent of the symbol along the nearest wall |
 | windows | window, bay window, blind window **and curtain wall** labels (on real drawings window glazing often comes out as curtain wall): the extent along the nearest wall; pieces of one window on the same wall are merged |
 | stairs | clusters of stair-labelled lines: the treads are the parallel lines of the dominant direction, their spacing the going |
+| railings | railing-labelled lines (pairs a few cm apart, else single lines) become railing walls with `railing_label` evidence; the shared balcony detection makes the space they bound a balcony, and 3D builds them as a low parapet with glass above |
 
 Each element keeps its source DXF entities and the model's class and score (`sympoint_label` evidence, notes).
-Hosting in walls, gaps, junctions, rooms, classification, validation, export and 3D are approach 1's.
+Hosting in walls, gaps, junctions, rooms, classification, validation, export and 3D are approach 1's, including
+the shared rules that a door needs a wall (missing walls re-checked around doors), that every area inside the
+building gets a floor, and that balcony walls are a low parapet with glass above (see `docs/ARCHITECTURE.md`).
 
 **Measured with perfect labels** (an oracle answering from the benchmark's layer names, `tests/sympoint`): the
 build reaches wall, room, door, window and column precision / recall of 0.98-1.00 on 12 of the 13 benchmark

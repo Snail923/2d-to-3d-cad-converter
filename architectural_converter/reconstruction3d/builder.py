@@ -15,7 +15,7 @@ from .mesh_utils import box, extrude
 
 COLORS = {"exterior_wall": [0.80, 0.78, 0.74, 1.0], "interior_wall": [0.92, 0.90, 0.86, 1.0],
           "partition_wall": [0.95, 0.95, 0.93, 1.0], "wall": [0.88, 0.86, 0.82, 1.0],
-          "railing": [0.55, 0.60, 0.66, 1.0], "balcony": [0.66, 0.70, 0.72, 1.0],
+          "railing": [0.55, 0.60, 0.66, 1.0], "balcony": [0.66, 0.70, 0.72, 1.0], "ground": [0.70, 0.68, 0.62, 1.0],
           "column": [0.62, 0.60, 0.58, 1.0], "floor": [0.76, 0.66, 0.52, 1.0],
           "stair": [0.70, 0.55, 0.42, 1.0], "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
 
@@ -82,6 +82,13 @@ def build_3d(model: dict, cfg) -> Model3D:
         return lv.get("height") if lv else None
     for w in view["walls"]:
         g = w["geometry"]
+        if w.get("classification") == "railing" and not w.get("height") and g["kind"] in ("straight", "centerline"):
+            u = np.array(g["direction"], float)
+            n = np.array([-u[1], u[0]])
+            a, bb = np.array(g["start"], float), np.array(g["end"], float)
+            t = w.get("thickness") or out.default("unknown_wall_thickness_m", p2["unknown_wall_thickness_m"], w["id"])
+            _railing(out, w, u, float(a @ n), float(a @ u), float(bb @ u), t, p2)
+            continue
         if w.get("classification") == "railing" and not w.get("height"):
             # balcony railing / parapet: an outdoor edge, not a storey-high wall
             H = out.default("railing_height_m", p2.get("railing_height_m", 1.1), w["id"])
@@ -151,11 +158,13 @@ def build_3d(model: dict, cfg) -> Model3D:
             V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
             out.add(r["id"], "floor", r.get("classification"), V, F,
                     COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
+    ground_levels = _ground(out, model, view, p2, levels, stacked)
     if stacked:
         level_of = {e["id"]: e.get("level") for k in ("walls", "openings", "rooms", "columns", "stairs")
                     for e in view.get(k, [])}
+        level_of.update(ground_levels)
         for m in out.meshes:
-            lv = levels.get(level_of.get(m["id"]))
+            lv = levels.get(level_of.get(m["id"]) or level_of.get(m["id"].removesuffix("_glass")))
             if lv is None:
                 continue
             tx, ty = lv.get("translation") or (0.0, 0.0)
@@ -164,6 +173,65 @@ def build_3d(model: dict, cfg) -> Model3D:
     out.metadata["bounds"] = [allv.min(axis=0).round(3).tolist(), allv.max(axis=0).round(3).tolist()]
     out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor", "stair")}
     return out
+
+
+def _shape(pg):
+    from shapely.geometry import Polygon
+    if not pg:
+        return None
+    if isinstance(pg, dict):
+        return Polygon(pg["exterior"], pg.get("holes") or []).buffer(0)
+    return Polygon(pg).buffer(0)
+
+
+def _ground(out, model, view, p2, levels, stacked) -> dict:
+    """Ground slabs where the building has no room floor (see topology/ground.py)."""
+    from shapely.geometry import box as _box
+    from shapely.ops import triangulate
+    from ..geometry.geometric_utils import polygons_of
+    from ..topology.ground import unassigned_floor
+    gc = p2.get("ground", {})
+    fp = model.get("building", {}).get("footprint")
+    if not gc.get("enabled", True) or not fp:
+        return {}
+    outline = [_shape(x) for x in (fp if isinstance(fp, list) else [fp])]
+    cover = [_shape(r.get("polygon")) for r in view["rooms"]]
+    cover += [_shape(w["geometry"].get("polygon")) for w in view["walls"]]
+    cover += [_shape(c.get("polygon")) for c in view["columns"]]
+    pieces = unassigned_floor([o for o in outline if o is not None], [c for c in cover if c is not None],
+                              gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
+    plans = [(lv["id"], _box(*lv["bbox"])) for lv in levels.values()
+             if stacked and lv.get("kind") == "floor_plan" and lv.get("bbox")]
+    slab = p2["slab_thickness_m"]
+    level_of = {}
+    for k, p in enumerate(pieces):
+        lid = None
+        if stacked:
+            lid = next((i for i, bx in plans if bx.contains(p.representative_point())), None)
+            if lid is None:
+                continue
+        parts = [p] if not p.interiors else [t for t in triangulate(p) if p.contains(t.representative_point())]
+        Vs = [extrude(list(q.exterior.coords), -slab, 0.0) for g in parts for q in polygons_of(g)]
+        if not Vs:
+            continue
+        V, F = _merge(Vs)
+        gid = f"ground_{k + 1:03d}"
+        out.add(gid, "floor", "ground", V, F, COLORS["ground"])
+        level_of[gid] = lid
+    if pieces:
+        out.metadata["ground_slabs"] = {"count": len(level_of), "area_m2": round(sum(p.area for p in pieces), 2)}
+    return level_of
+
+
+def _railing(out, w, u, c, s0, s1, t, p2):
+    """Balcony wall: a low solid parapet with glass above it up to the railing height."""
+    top = out.default("railing_height_m", p2.get("railing_height_m", 1.1), w["id"])
+    par = min(top, out.default("balcony_parapet_height_m", p2.get("balcony_parapet_height_m", 0.5), w["id"]))
+    V, F = box(u, c, s0, s1, t, 0.0, par)
+    out.add(w["id"], "wall", w.get("classification"), V, F, COLORS["railing"])
+    if top > par:
+        gv, gf = box(u, c, s0, s1, max(0.02, t * 0.25), par, top)
+        out.add(w["id"] + "_glass", "window", "balcony_glass", gv, gf, COLORS["glass"])
 
 
 def _stair_mesh(out, sf):
