@@ -509,45 +509,76 @@ class ExtractionPipeline:
         return out
 
     def _attic_roofs(self, st, lc, log):
-        """Footprint of the pitched roof of attic / roof storeys: the storey's walled part (walls
-        that are not railings and the rooms that are not terraces, gaps closed), else its outline."""
-        from ..geometry.geometric_utils import polygons_of, robust_union, safe_buffer
+        """Footprint of the pitched roof of attic / roof storeys.
+
+        1. As drawn: the roof plan's tile hatches (topology/roof_plan.py), aligned onto the storey,
+           with the untiled middle (deck, core) as a hole.
+        2. Else the storey's walled part (walls that are not railings, rooms that are not terraces).
+        A roof is not wider than the building: both are cut to the outline of the storey below."""
+        from shapely.affinity import translate
+        from ..geometry.geometric_utils import polygons_of, robust_intersection, robust_union, safe_buffer
         from shapely.geometry import Polygon as _Polygon
+        from ..topology.roof_plan import roof_areas, roof_for_level
         pr = self.cfg["phase2"].get("pitched_roof", {})
         names = [n.lower() for n in lc.get("no_roof_names", [])]
         b = st.building
+        plans = sorted((lv for lv in b.levels if lv.kind == "floor_plan" and lv.outline), key=lambda lv: lv.z)
+        min_area = pr.get("min_area_m2", 10.0)
+        areas = None
         for lv in b.levels:
             lv.roof = None
             if lv.kind != "floor_plan" or not pr.get("enabled", True) or not lv.outline \
                     or not any(n in (lv.name or "").lower() for n in names):
                 continue
             try:
-                live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
-                geoms = [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis
-                         and w.classification != "railing"]
-                geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis
-                          and r.classification != "balcony"]
-                geoms = [g for g in geoms if g is not None and not g.is_empty]
-                rings, source = [], "outline"
-                if geoms:
-                    u = robust_union(geoms)
-                    closed = safe_buffer(safe_buffer(u, 2.0, join_style=2), -2.0, join_style=2)
-                    parts = [_Polygon(p.exterior) for p in polygons_of(closed) if p.area >= pr.get("min_area_m2", 10.0)]
-                    if parts and sum(p.area for p in parts) >= 0.3 * sum(p.area for p in lv.outline):
-                        rings, source = parts, "walled part"
-                if not rings:
-                    rings = [p for p in lv.outline if p.area >= pr.get("min_area_m2", 10.0)]
-                over = float(pr.get("overhang_m", 0.4))
-                if over > 0:
-                    rings = [_Polygon(q.exterior) for p in rings for q in polygons_of(safe_buffer(p, over, join_style=2))]
-                rings = [p.simplify(0.05) for p in rings]
-                rings = [p for p in rings if p.geom_type == "Polygon" and p.is_valid and p.area > 0]
+                tx, ty = lv.translation
+                k = plans.index(lv)
+                below, bl = None, lv
+                if k > 0:
+                    bl = plans[k - 1]
+                    below = robust_union([translate(p, bl.translation[0], bl.translation[1]) for p in bl.outline])
+                target = robust_union([translate(p, tx, ty) for p in lv.outline])
+                over = float(pr.get("overhang_m", 0.0))
+                limit = safe_buffer(below, over, join_style=2) if below is not None and over > 0 else below
+                parts, source, info = None, None, {}
+                if pr.get("from_roof_plan", True):
+                    if areas is None:
+                        areas = roof_areas(st.ctx.hatch_regions, pr.get("hatch_patterns", []), min_area)
+                    hull = target.convex_hull if below is None else robust_union([target, below]).convex_hull
+                    # the roof sheet is aligned onto the sheet of the storey below, which is already placed
+                    parts, info = roof_for_level(areas, st.ctx.strokes, bl.bbox, st.ctx.tol, hull, limit,
+                                                 float(pr.get("min_overlap", 0.6)), min_area, tuple(bl.translation))
+                    source = "roof plan" if parts else None
+                if not parts:
+                    live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
+                    geoms = [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis
+                             and w.classification != "railing"]
+                    geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis
+                              and r.classification != "balcony"]
+                    geoms = [translate(g, tx, ty) for g in geoms if g is not None and not g.is_empty]
+                    body, source = target, "storey outline"
+                    if geoms:
+                        closed = safe_buffer(safe_buffer(robust_union(geoms), 2.0, join_style=2), -2.0, join_style=2)
+                        walled = [_Polygon(p.exterior) for p in polygons_of(closed) if p.area >= min_area]
+                        if walled and sum(p.area for p in walled) >= 0.3 * target.area:
+                            body, source = robust_union(walled), "walled part of the storey"
+                    if over > 0:
+                        body = safe_buffer(body, over, join_style=2)
+                    if limit is not None:
+                        body = robust_intersection(body, limit)
+                    parts = [_Polygon(p.exterior) for p in polygons_of(body) if p.area >= min_area]
+                rings = []
+                for p in parts or []:
+                    p = translate(p, -tx, -ty)                      # back onto the storey's own sheet
+                    q = p.simplify(0.03)
+                    p = q if q.geom_type == "Polygon" and q.is_valid and not q.is_empty else p
+                    r5 = lambda ring: [[round(float(x), 4), round(float(y), 4)] for x, y in ring.coords]  # noqa: E731
+                    rings.append({"exterior": r5(p.exterior), "holes": [r5(h) for h in p.interiors if _Polygon(h).area >= 0.5]})
                 if rings:
-                    lv.roof = {"kind": "pitched", "source": source,
-                               "footprint": [[[round(float(x), 4), round(float(y), 4)] for x, y in p.exterior.coords]
-                                             for p in rings]}
-                    log.setdefault(lv.id, {})["roof"] = {"kind": "pitched", "source": source,
-                                                          "area_m2": round(sum(p.area for p in rings), 2)}
+                    lv.roof = {"kind": "pitched", "source": source, "footprint": rings}
+                    log.setdefault(lv.id, {})["roof"] = dict(
+                        info, kind="pitched", source=source, holes=sum(len(r["holes"]) for r in rings),
+                        area_m2=round(sum(_Polygon(r["exterior"], r["holes"]).area for r in rings), 2))
             except Exception as e:  # noqa: BLE001
                 st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                           "message": f"roof of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})

@@ -184,31 +184,51 @@ def test_outline_connects_the_wall_vertices_when_the_plan_is_not_closed():
     assert level_outline([], []) == ([], None)
 
 
+def _areas(mesh):
+    import numpy as np
+    V, F = mesh
+    if not len(F):
+        return 0.0, 0.0
+    t = V[F]
+    a, b = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
+    return float(0.5 * np.linalg.norm(np.cross(a, b), axis=1).sum()), float(0.5 * np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum())
+
+
 def test_hip_roof_surface():
     import numpy as np
     from architectural_converter.reconstruction3d.roof import hip_roof, roof_height_at
     ring = [(0, 0), (10, 0), (10, 6), (0, 6)]
-    V, F, rise = hip_roof(ring, 45.0)
-    assert abs(rise - 3.0) < 0.01 and abs(V[:, 2].max() - 3.0) < 0.01 and V[:, 2].min() == 0.0
-    tri = V[F]
-    area = 0.5 * np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum()
-    assert abs(area - 60 / np.cos(np.radians(45))) < 0.06 * area        # four planes at 45 degrees
-    plan = 0.5 * np.abs(np.cross(tri[:, 1, :2] - tri[:, 0, :2], tri[:, 2, :2] - tri[:, 0, :2])).sum()
-    assert abs(plan - 60.0) < 0.01                                        # covers the outline, no overlap
+    r = hip_roof(ring, 45.0)
+    (s0, p0), (s1, p1) = _areas(r["courses"][0]), _areas(r["courses"][1])
+    V = np.vstack([r["courses"][0][0], r["courses"][1][0]])
+    assert abs(r["rise"] - 3.0) < 0.01 and abs(V[:, 2].max() - 3.0) < 0.01 and V[:, 2].min() == 0.0
+    assert abs(p0 + p1 - 60.0) < 0.01                                       # covers the outline, no overlap
+    assert abs(s0 + s1 - 60 / np.cos(np.radians(45))) < 0.05                # four planes at 45 degrees
+    assert p0 > 20 and p1 > 20 and not len(r["deck"][1])                    # rows of tiles alternate
     # the ridge runs along the middle of the long sides; the short sides carry the triangles (hips)
     top = V[V[:, 2] > 2.99]
     assert top[:, 0].min() < 3.2 and top[:, 0].max() > 6.8 and np.allclose(top[:, 1], 3.0, atol=0.02)
     assert abs(roof_height_at(5, 1, [ring], 45.0, None, 0.0) - 1.0) < 1e-6
     assert abs(roof_height_at(0.5, 3, [ring], 45.0, None, 0.5) - 1.0) < 1e-6 and roof_height_at(11, 3, [ring], 45.0, None, 0) is None
-    # a height limit gives a flat top; an L-shaped outline has a valley, still one surface
-    V2, F2, rise2 = hip_roof(ring, 45.0, max_rise=1.0, eave_z=2.0)
-    assert abs(rise2 - 1.0) < 1e-6 and abs(V2[:, 2].max() - 3.0) < 1e-6 and abs(V2[:, 2].min() - 2.0) < 1e-6
-    ell = [(0, 0), (12, 0), (12, 5), (5, 5), (5, 12), (0, 12)]
-    V3, F3, rise3 = hip_roof(ell, 30.0)
-    t3 = V3[F3]
-    assert abs(0.5 * np.abs(np.cross(t3[:, 1, :2] - t3[:, 0, :2], t3[:, 2, :2] - t3[:, 0, :2])).sum() - 95.0) < 0.05
-    assert abs(rise3 - 2.5 * np.tan(np.radians(30))) < 0.02
-    assert len(hip_roof([(0, 0), (1, 0)], 30.0)[1]) == 0
+    # tiles: every course stands proud at its lower edge (a sawtooth over the plane)
+    t = hip_roof(ring, 45.0, course_m=0.5, thickness_m=0.05)
+    Vt = np.vstack([t["courses"][0][0], t["courses"][1][0]])
+    eave = Vt[np.isclose(Vt[:, 1], 0.0) & (Vt[:, 0] > 1) & (Vt[:, 0] < 9)]
+    assert len(eave) and np.allclose(eave[:, 2], 0.05)
+    # a height limit gives a flat deck; a hole (the untiled middle of the roof plan) stays open
+    h = hip_roof({"exterior": [(0, 0), (20, 0), (20, 17), (0, 17)], "holes": [[(8, 3), (13.5, 3), (13.5, 8.5), (8, 8.5)]]},
+                 30.0, max_rise=2.5, eave_z=0.5)
+    tiles = _areas(h["courses"][0])[1] + _areas(h["courses"][1])[1]
+    deck = _areas(h["deck"])[1]
+    assert abs(tiles + deck - (340 - 30.25)) < 0.1 and deck > 20 and abs(h["rise"] - 2.5) < 1e-9
+    assert abs(h["deck"][0][:, 2].max() - 3.0) < 1e-9
+    fp = {"exterior": [(0, 0), (20, 0), (20, 17), (0, 17)], "holes": [[(8, 3), (13.5, 3), (13.5, 8.5), (8, 8.5)]]}
+    assert roof_height_at(10, 5, [fp], 30.0, 2.5, 0.5) is None and roof_height_at(10, 1, [fp], 30.0, 2.5, 0.5) > 0.5
+    # an L-shaped outline has a valley and splits towards two ridges: still one covering surface
+    ell = hip_roof([(0, 0), (12, 0), (12, 5), (5, 5), (5, 12), (0, 12)], 30.0)
+    assert abs(_areas(ell["courses"][0])[1] + _areas(ell["courses"][1])[1] - 95.0) < 0.05
+    assert abs(ell["rise"] - 2.5 * np.tan(np.radians(30))) < 0.02
+    assert not len(hip_roof([(0, 0), (1, 0)], 30.0)["courses"][0][1])
 
 
 def test_attic_storey_gets_a_pitched_roof_and_its_walls_are_trimmed():
@@ -219,14 +239,19 @@ def test_attic_storey_gets_a_pitched_roof_and_its_walls_are_trimmed():
     model = copy.deepcopy(st.model)
     top = max((lv for lv in model["building"]["levels"] if lv["kind"] == "floor_plan"), key=lambda lv: lv["z"])
     top["name"] = "Attic"
-    top["roof"] = {"kind": "pitched", "source": "outline", "footprint": top["outline"]}
+    top["roof"] = {"kind": "pitched", "source": "storey outline", "footprint": [{"exterior": r, "holes": []} for r in top["outline"]]}
     m3 = build_3d(model, PipelineConfig())
-    roof = next(m for m in m3.meshes if m["id"] == f"{top['id']}_roof")
-    assert roof["type"] == "roof" and roof["classification"] == "pitched_roof" and roof["level"] == top["id"]
+    roofs = [m for m in m3.meshes if m["classification"] == "pitched_roof"]
+    assert {m["id"] for m in roofs} == {f"{top['id']}_roof", f"{top['id']}_roof_b"} and roofs[0]["color"] != roofs[1]["color"]
+    assert all(m["type"] == "roof" and m["level"] == top["id"] for m in roofs)
     info = m3.metadata["pitched_roofs"][0]
-    z = roof["vertices"][:, 2] - top["z"]
-    assert abs(z.max() - info["ridge_m"]) < 1e-3 and info["ridge_m"] <= top["height"] + 1e-6 and info["ridge_m"] > 1.5
-    assert abs(z.min() - info["eave_m"]) < 1e-3
+    z = np.concatenate([m["vertices"][:, 2] for m in m3.meshes if m["id"].startswith(f"{top['id']}_roof")]) - top["z"]
+    assert info["ridge_m"] <= top["height"] + 1e-6 and info["ridge_m"] > 1.5 and z.max() <= info["ridge_m"] + 0.06
+    assert abs(z.min() - info["eave_m"]) < 0.06 and info["eave_m"] == 1.0          # starts on the knee wall, no overhang
+    # the roof is not wider than the storey
+    xy = np.vstack([m["vertices"][:, :2] for m in roofs])
+    base = next(m for m in m3.meshes if m["id"] == f"{top['id']}_base")["vertices"][:, :2]
+    assert (xy.min(0) >= base.min(0) - 1e-6).all() and (xy.max(0) <= base.max(0) + 1e-6).all()
     # every wall of the attic ends under the roof; the storeys below keep their height
     walls = [m for m in m3.meshes if m["type"] == "wall" and m.get("level") == top["id"]]
     assert walls and max(m["vertices"][:, 2].max() for m in walls) - top["z"] <= info["ridge_m"] + 1e-6
@@ -238,3 +263,31 @@ def test_attic_storey_gets_a_pitched_roof_and_its_walls_are_trimmed():
         m["vertices"][:, 2].max() for m in flat.meshes if m["type"] == "wall" and m.get("level") not in (None, top["id"]))
     off = build_3d(model, PipelineConfig({"phase2": {"pitched_roof": {"enabled": False}}}))
     assert not [m for m in off.meshes if m["classification"] == "pitched_roof"]
+
+
+def test_roof_outline_is_read_from_the_roof_plan_hatches():
+    from types import SimpleNamespace
+    from shapely.geometry import Polygon, box
+    from architectural_converter.topology.roof_plan import roof_areas, roof_for_level
+    H = lambda poly, pat, layer="L1": SimpleNamespace(polygon=poly, pattern=pat, layer=layer)  # noqa: E731
+    # the roof plan sheet, 100 m to the right of the floor plan: four faces around an untiled middle
+    faces = [Polygon([(100, 0), (120, 0), (114, 4), (106, 4)]), Polygon([(120, 0), (120, 16), (114, 12), (114, 4)]),
+             Polygon([(120, 16), (100, 16), (106, 12), (114, 12)]), Polygon([(100, 16), (100, 0), (106, 4), (106, 12)])]
+    regions = [H(f, "AR-RSHKE") for f in faces] + [H(box(100, 30, 120, 31), "AR-RSHKE"),      # a roof in an elevation
+                                                    H(box(0, 0, 20, 16), "ANSI31")]             # another hatch
+    areas = roof_areas(regions, ["AR-RSHKE", "ROOF"])
+    assert len(areas) == 1 and abs(areas[0].area - (320 - 64)) < 0.5 and len(areas[0].interiors) == 1
+    # linework that repeats on both sheets (plot lines) brings the roof sheet onto the floor plan
+    def stroke(a, b):
+        from shapely.geometry import LineString
+        return SimpleNamespace(p0=a, p1=b, line=lambda a=a, b=b: LineString([a, b]))
+    plot = [((-5, -5), (25, -5)), ((25, -5), (25, 21)), ((25, 21), (-5, 21)), ((-5, 21), (-5, -5)),
+            ((0, 0), (20, 0)), ((20, 0), (20, 16)), ((20, 16), (0, 16)), ((0, 16), (0, 0)), ((3, -5), (3, -2)), ((9, 21), (9, 18))]
+    strokes = [stroke(a, b) for a, b in plot] + [stroke((a[0] + 100, a[1]), (b[0] + 100, b[1])) for a, b in plot]
+    tol = SimpleNamespace(snap=0.01)
+    target = box(0, 0, 20, 16)
+    parts, info = roof_for_level(areas, strokes, (0, 0, 20, 16), tol, target, below=box(1, 0, 20, 16))
+    assert info["matched"] and abs(info["translation"][0] + 100) < 0.01 and abs(info["translation"][1]) < 0.01
+    assert len(parts) == 1 and len(parts[0].interiors) == 1                 # the open middle is kept
+    assert parts[0].bounds == (1.0, 0.0, 20.0, 16.0)                         # cut to the storey below
+    assert roof_for_level(areas, strokes, (0, 0, 20, 16), tol, box(200, 200, 220, 216))[0] is None

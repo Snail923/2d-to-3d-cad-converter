@@ -43,13 +43,49 @@
     "max_overhang_m": 3.0
   },
   "pitched_roof": {
-    "_doc": "Attic / roof storeys (level name matches level_slabs.no_roof_names) get a pitched hip roof (reconstruction3d/roof.py) instead of an open top: every side of the storey's outline carries a plane rising inwards at pitch_deg, the outline is grown by overhang_m for the eaves, the roof starts knee_wall_m above the attic floor and rises at most to the storey height (max_height_m overrides; where the planes would go higher the roof is flat). The attic's walls, columns and glazing are trimmed under the slope.",
+    "_doc": "Attic / roof storeys (level name matches level_slabs.no_roof_names) get a pitched hip roof (reconstruction3d/roof.py). Outline: the roof plan of the drawing when it has one (areas hatched with a roof-tile pattern: hatch_patterns are matched in the hatch pattern and layer name; the untiled middle is a hole), else the storey's walled part; never wider than the storey below plus overhang_m. Shape: every side of the outline carries a plane rising inwards at pitch_deg, starting knee_wall_m above the attic floor and rising at most to the storey height (max_height_m overrides; above it the roof is flat). The attic's walls, columns and glazing are trimmed under the slope. tile: the roof surface is laid in courses of tiles (course_m exposed length up the slope, each course standing thickness_m proud at its lower edge), coloured alternately with colors.",
     "enabled": true,
+    "from_roof_plan": true,
+    "hatch_patterns": [
+      "AR-RSHKE",
+      "AR-RROOF",
+      "ROOF",
+      "SHAKE",
+      "SHINGLE",
+      "TUILE",
+      "ZIEGEL",
+      "TEJA"
+    ],
+    "min_overlap": 0.6,
     "pitch_deg": 30.0,
-    "overhang_m": 0.4,
+    "overhang_m": 0.0,
     "knee_wall_m": 1.0,
     "max_height_m": null,
-    "contours": 12,
-    "min_area_m2": 10.0
+    "min_area_m2": 10.0,
+    "tile": {
+      "course_m": 0.35,
+      "thickness_m": 0.05,
+      "max_courses": 60,
+      "colors": [
+        [
+          0.72,
+          0.36,
+          0.25,
+          1.0
+        ],
+        [
+          0.63,
+          0.3,
+          0.21,
+          1.0
+        ]
+      ],
+      "deck_color": [
+        0.7,
+        0.68,
+        0.62,
+        1.0
+      ]
+    }
   }
 }

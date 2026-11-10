@@ -266,48 +266,63 @@ def _pitched_roofs(out, p2, levels, view, level_of) -> None:
     """Attic / roof storeys: a tiled hip roof over the footprint Phase 1 gives (building.levels[].roof),
     and everything of that storey trimmed under its slope (the attic room is inside the roof).
     Runs before the storeys are moved to their levels: z = 0 is the attic floor."""
-    from .roof import hip_roof, roof_height_at
+    from .roof import as_polygon, hip_roof, roof_height_at
     pr = p2.get("pitched_roof", {})
     if not pr.get("enabled", True):
         return
+    tile = pr.get("tile", {})
+    cols = tile.get("colors") or [COLORS["roof_tiles"]]
     of = {e["id"]: e.get("level") for k in ("walls", "openings", "columns", "stairs") for e in view.get(k, [])}
     for lv in levels.values():
         roof = lv.get("roof") or {}
         if lv.get("kind") != "floor_plan" or roof.get("kind") != "pitched" or not roof.get("footprint"):
             continue
         pitch = float(pr.get("pitch_deg", 30.0))
-        over, knee = float(pr.get("overhang_m", 0.4)), float(pr.get("knee_wall_m", 1.0))
+        over, knee = float(pr.get("overhang_m", 0.0)), float(pr.get("knee_wall_m", 1.0))
         total = pr.get("max_height_m") or lv.get("height") or p2["wall_height_m"]
-        eave = knee - over * np.tan(np.radians(pitch))         # the eave hangs below the knee-wall top
+        eave = knee - over * np.tan(np.radians(pitch))         # an overhanging eave hangs below the knee-wall top
         max_rise = max(0.3, float(total) - eave)
-        parts, rise = [], 0.0
-        for ring in roof["footprint"]:
+        rows, decks, rise, courses = ([], []), [], 0.0, 0
+        for fp in roof["footprint"]:
             try:
-                V, F, r = hip_roof(ring, pitch, max_rise, eave, int(pr.get("contours", 12)))
+                r = hip_roof(fp, pitch, max_rise, eave, float(tile.get("course_m", 0.35)),
+                             float(tile.get("thickness_m", 0.05)), int(tile.get("max_courses", 60)))
             except Exception:  # noqa: BLE001  (an optional roof never stops the 3D build)
                 continue
-            if len(F):
-                parts.append((V, F))
-                rise = max(rise, r)
-        if not parts:
+            for k in (0, 1):
+                if len(r["courses"][k][1]):
+                    rows[k].append(r["courses"][k])
+            if len(r["deck"][1]):
+                decks.append(r["deck"])
+            rise = max(rise, r["rise"])
+        if not rows[0] and not rows[1]:
             continue
-        V, F = _merge(parts)
-        rid = f"{lv['id']}_roof"
-        out.add(rid, "roof", "pitched_roof", V, F, COLORS["roof_tiles"])
-        level_of[rid] = lv["id"]
-        # trim the storey's own elements under the slope (a chord under a roof plane stays under it)
+        for k, sfx in ((0, "_roof"), (1, "_roof_b")):          # alternate rows of tiles, two tones
+            if rows[k]:
+                V, F = _merge(rows[k])
+                out.add(f"{lv['id']}{sfx}", "roof", "pitched_roof", V, F, cols[k % len(cols)])
+                level_of[f"{lv['id']}{sfx}"] = lv["id"]
+        if decks:
+            V, F = _merge(decks)
+            out.add(f"{lv['id']}_roof_deck", "roof", "roof_deck", V, F, tile.get("deck_color") or COLORS["ground"])
+            level_of[f"{lv['id']}_roof_deck"] = lv["id"]
+        # trim the storey's own elements under the slope (a chord under a roof plane stays under it);
+        # what stands in the open middle (a core) keeps its height
+        fps = [as_polygon(fp) for fp in roof["footprint"]]
         for m in out.meshes:
             base = m["id"].removesuffix("_glass")
             if m["type"] in ("floor", "roof") or (of.get(m["id"]) or of.get(base)) != lv["id"]:
                 continue
             Vm = m["vertices"]
             for i in np.nonzero(Vm[:, 2] > 1e-6)[0]:
-                z = roof_height_at(float(Vm[i, 0]), float(Vm[i, 1]), roof["footprint"], pitch, max_rise, eave)
+                z = roof_height_at(float(Vm[i, 0]), float(Vm[i, 1]), fps, pitch, max_rise, eave)
                 if z is not None and Vm[i, 2] > z - 0.02:
                     Vm[i, 2] = max(0.0, z - 0.02)
         out.metadata.setdefault("pitched_roofs", []).append(
             {"level": lv["id"], "name": lv.get("name"), "pitch_deg": pitch, "eave_m": round(float(eave), 3),
-             "ridge_m": round(float(eave + rise), 3), "footprint": roof.get("source")})
+             "ridge_m": round(float(eave + rise), 3), "footprint": roof.get("source"),
+             "open_middle": any(isinstance(fp, dict) and fp.get("holes") for fp in roof["footprint"]),
+             "tile": {"course_m": tile.get("course_m", 0.35), "thickness_m": tile.get("thickness_m", 0.05)}})
 
 
 def _railing(out, w, u, c, s0, s1, t, p2):
