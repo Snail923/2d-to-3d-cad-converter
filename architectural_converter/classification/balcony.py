@@ -28,10 +28,9 @@ Consequences, all recorded in notes / evidence:
 """
 from __future__ import annotations
 
-from shapely.ops import unary_union
 
 from ..detectors.text_detector import room_type_of
-from ..geometry.geometric_utils import robust_intersection
+from ..geometry.geometric_utils import robust_intersection, robust_union
 from ..models.base_entity import Status
 from ..preprocessing.layer_analyzer import category_scores
 from .wall_classifier import FACADE_LINE_NOTE
@@ -97,7 +96,7 @@ def _free_part(seg, w, walls, tol):
         poly = v.polygon()
         if poly is None or not poly.intersects(probe):
             continue
-        cover = poly if cover is None else cover.union(poly)
+        cover = poly if cover is None else robust_union([cover, poly])
     if cover is None:
         return seg
     from ..geometry.geometric_utils import robust_difference
@@ -178,8 +177,8 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
                 on_outline[wid] = part.length
                 rail_segs[wid] = part
         # union, not sum: overlapping duplicate walls and corner pieces must not count twice
-        outline_geom = unary_union([g for g in rail_segs.values() if not g.is_empty]) if rail_segs else None
-        rail_geom = unary_union([_free_part(rail_segs[wid], walls[wid], walls.values(), tol)
+        outline_geom = robust_union([g for g in rail_segs.values() if not g.is_empty]) if rail_segs else None
+        rail_geom = robust_union([_free_part(rail_segs[wid], walls[wid], walls.values(), tol)
                                  for wid in rail_segs if wid in railing_ev]) if rail_segs else None
         outline = outline_geom.length if outline_geom is not None else 0.0
         rail = rail_geom.length if rail_geom is not None else 0.0

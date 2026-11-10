@@ -159,7 +159,9 @@ def build_3d(model: dict, cfg) -> Model3D:
             out.add(r["id"], "floor", r.get("classification"), V, F,
                     COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
     ground_levels = _ground(out, model, view, p2, levels, stacked)
-    if stacked:
+    # stack_levels false: every floor stays where it is drawn, side by side on the ground
+    out.metadata["stacked_in_3d"] = bool(stacked and p2.get("stack_levels", True))
+    if stacked and p2.get("stack_levels", True):
         level_of = {e["id"]: e.get("level") for k in ("walls", "openings", "rooms", "columns", "stairs")
                     for e in view.get(k, [])}
         level_of.update(ground_levels)

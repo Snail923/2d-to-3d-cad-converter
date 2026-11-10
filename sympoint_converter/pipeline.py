@@ -29,10 +29,10 @@ class SymPointPipeline(ExtractionPipeline):
     def __init__(self, sp_config: dict | None = None, engine_overrides: dict | None = None, progress=None,
                  url: str | None = None, response: dict | None = None, labels_progress=print):
         self.sp = sp_config or load_config()
+        from . import _merge
         ov = copy.deepcopy(self.sp.get("engine_overrides", {}))
         ov.pop("_doc", None)
-        for k, v in (engine_overrides or {}).items():
-            ov[k] = v
+        ov = _merge(ov, engine_overrides or {})
         super().__init__(PipelineConfig(ov), progress)
         self.url, self.response, self.labels_progress = url, response, labels_progress
 

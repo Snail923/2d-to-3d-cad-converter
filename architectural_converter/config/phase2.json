@@ -21,5 +21,7 @@
     "min_width_m": 0.4
   },
   "balcony_parapet_height_m": 0.5,
-  "_doc_balcony": "Balcony walls (classification 'railing'): a low solid parapet of balcony_parapet_height_m with glass above it up to railing_height_m."
+  "_doc_balcony": "Balcony walls (classification 'railing'): a low solid parapet of balcony_parapet_height_m with glass above it up to railing_height_m.",
+  "stack_levels": true,
+  "_doc_stack_levels": "Multi-storey permit sets: true = floors moved onto each other at their levels; false = every floor plan stays where it is drawn, side by side at ground level."
 }

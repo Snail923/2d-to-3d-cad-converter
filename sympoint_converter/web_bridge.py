@@ -46,10 +46,18 @@ def request(path: str, config_json: str | None = None) -> str:
     return json.dumps(req, separators=(",", ":"))
 
 
-def process(path: str, response_json: str, corrections_json: str | None = None, config_json: str | None = None) -> str:
+SAFE = {"runtime": {"safe_mode": True}, "reconstruction": {"door_rules": {"enabled": False}},
+        "phase2": {"ground": {"enabled": False}}}
+
+
+def process(path: str, response_json: str, corrections_json: str | None = None, config_json: str | None = None,
+            safe: bool = False) -> str:
+    """``safe``: retry after a geometry error without the optional steps (missing-room hypotheses,
+    door rules, ground coverage), like approach 1's safe mode."""
     cfg = _cfg(config_json)               # must be the tiling the response was made for
     resp = json.loads(response_json)
-    pipe = SymPointPipeline(cfg, response=resp, progress=wb1._progress, labels_progress=wb1._progress)
+    pipe = SymPointPipeline(cfg, engine_overrides=SAFE if safe else None, response=resp,
+                            progress=wb1._progress, labels_progress=wb1._progress)
     st = pipe.process(path, corrections=json.loads(corrections_json) if corrections_json else None)
     wb1._S.update(pipe=pipe, st=st, cfg=pipe.cfg)
     remember("sympoint")
@@ -118,3 +126,13 @@ def evaluate_both(reference_json: str) -> str:
     ref = json.loads(reference_json)
     return json.dumps({k: evaluate(v["st"].model, ref) for k, v in _STORE.items()},
                       default=lambda o: float(o) if hasattr(o, "__float__") else str(o))
+
+
+def mesh(stack: bool) -> str:
+    """3D mesh of the active result with the floors stacked or side by side as drawn."""
+    from architectural_converter.reconstruction3d import build_3d
+    from architectural_converter.pipeline.pipeline_config import PipelineConfig
+    st, cfg = wb1._S["st"], wb1._S["cfg"]
+    c2 = PipelineConfig(cfg.to_dict())
+    c2.data["phase2"]["stack_levels"] = bool(stack)
+    return json.dumps(build_3d(st.model, c2).to_json(), separators=(",", ":"))

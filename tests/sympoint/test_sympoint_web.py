@@ -76,3 +76,14 @@ def test_site_ships_both_packages_but_not_the_gpu_service():
         assert f in files, f
     assert not any(f.startswith("sympoint_converter/service/") for f in files)
     assert not any("/drawings/" in f or "__pycache__" in f for f in files)
+
+
+def test_safe_mode_and_floor_layout_switch(both):
+    path, _, _, p2 = both
+    assert p2["mesh"]["metadata"].get("stacked_in_3d") is False          # approach 2: side by side
+    req = json.loads(wb2.request(path, json.dumps({"tile_m": 20})))
+    p = json.loads(wb2.process(path, json.dumps(oracle_answer(req)), None, json.dumps({"tile_m": 20}), True))
+    logs = p["model"]["statistics"]["logs"]
+    assert logs["topology"]["door_rules"].get("skipped") == "disabled" and logs["topology"]["recovery"].get("skipped")
+    m = json.loads(wb2.mesh(True))
+    assert "meshes" in m and "stacked_in_3d" in m["metadata"]

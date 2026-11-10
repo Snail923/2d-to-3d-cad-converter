@@ -278,7 +278,12 @@ class ExtractionPipeline:
         openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
         # a door is always in a wall: complete the wall on the line of every door
         from ..topology.door_rules import complete_door_walls, promote_door_rooms
-        dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids)
+        try:
+            dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids)
+        except Exception as e:  # noqa: BLE001  (an optional rule must never stop the pipeline)
+            dlog = {"error": f"{type(e).__name__}: {e}"}
+            st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                      "message": f"door rules (door line) skipped: {dlog['error']}"})
         live = [w for w in walls if w.status != Status.REJECTED]
         # walls whose openings were all rejected stay closed; rejected openings detach from hosts
         for w in walls:
@@ -301,7 +306,8 @@ class ExtractionPipeline:
         live_rooms = [r for r in rooms if r.status != Status.REJECTED]
         G_rooms = relate_rooms(live_rooms, live, openings, tol)
         from ..topology.door_rules import drop_unused
-        dlog["unused_rejected"] = drop_unused(walls, live_rooms)
+        if "error" not in dlog:
+            dlog["unused_rejected"] = drop_unused(walls, live_rooms)
         live = [w for w in walls if w.status != Status.REJECTED]
         if cfg["runtime"].get("safe_mode"):
             hyps, hrooms, hlog = [], [], {"skipped": "safe mode"}
@@ -311,7 +317,12 @@ class ExtractionPipeline:
             self._report("Step 7/10: missing-room recovery")
             hyps, hrooms, hlog = recover_missing_rooms(walls, st.columns, live_rooms, st.ctx.labels, tol, cfg, st.ctx.ids, rd)
             if not getattr(st, "_door_room_pass", False):
-                promoted = promote_door_rooms(hyps, hrooms, openings, tol, cfg, st.ctx.ids, live_rooms, walls)
+                try:
+                    promoted = promote_door_rooms(hyps, hrooms, openings, tol, cfg, st.ctx.ids, live_rooms, walls)
+                except Exception as e:  # noqa: BLE001
+                    promoted = []
+                    st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                              "message": f"door rules (rooms with a door) skipped: {type(e).__name__}: {e}"})
                 if promoted:
                     # a room with a door needs all its walls: the closing hypotheses become walls,
                     # and rooms are detected again with them

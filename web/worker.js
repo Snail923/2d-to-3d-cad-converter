@@ -65,7 +65,9 @@ self.onmessage = async (ev) => {
       result = sp().request(writeInput(args), args.config ? JSON.stringify(args.config) : null);
     } else if (cmd === "sp_process") {
       result = sp().process(writeInput(args), args.response, args.corrections ? JSON.stringify(args.corrections) : null,
-                            args.config ? JSON.stringify(args.config) : null);
+                            args.config ? JSON.stringify(args.config) : null, !!args.safe);
+    } else if (cmd === "sp_mesh") {
+      result = sp().mesh(!!args.stack);
     } else if (cmd === "sp_rerun") {
       result = sp().rerun(JSON.stringify(args.corrections));
     } else if (cmd === "sp_remember") {

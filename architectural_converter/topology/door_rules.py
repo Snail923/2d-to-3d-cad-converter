@@ -18,7 +18,7 @@ import math
 
 from shapely.geometry import LineString, Point
 
-from ..geometry.geometric_utils import canonical_dir, dot, frame_point, merge_intervals, normal
+from ..geometry.geometric_utils import canonical_dir, dot, frame_point, merge_intervals, normal, robust_intersection
 from ..models.base_entity import Status
 from ..models.wall import Wall
 
@@ -72,7 +72,7 @@ def _first_stop(u, c, s_from, direction, walls, tol, reach):
         poly = w.polygon(max(tol.snap * 2, 0.06))
         if poly is None or not poly.intersects(ray):
             continue
-        d = Point(p).distance(poly.intersection(ray))
+        d = Point(p).distance(robust_intersection(poly, ray))
         if best is None or d < best:
             best = d
     return best
@@ -188,10 +188,10 @@ def promote_door_rooms(hyps, hrooms, openings, tol, cfg, ids, rooms=(), walls=()
     # shortest first; one wall per enclosed area (several hypotheses often close the same room)
     for h in sorted(hyps, key=lambda x: x.length):
         rooms = by_hyp.get(h.id, [])
-        if any(r.polygon.intersection(t).area > 0.5 * min(r.polygon.area, t.area) for r in rooms for t in taken):
+        if any(robust_intersection(r.polygon, t).area > 0.5 * min(r.polygon.area, t.area) for r in rooms for t in taken):
             continue
         # new space only: most of the enclosed area must not be a room already
-        if any(sum(r.polygon.intersection(x).area for x in live_rooms) > 0.5 * r.polygon.area for r in rooms):
+        if any(sum(robust_intersection(r.polygon, x).area for x in live_rooms) > 0.5 * r.polygon.area for r in rooms):
             continue
         src = by_id.get((h.reconstruction.get("hypothesis") or {}).get("from_wall"))
         if src is not None and src.kind in ("straight", "centerline"):

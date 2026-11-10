@@ -100,6 +100,9 @@
           "sympoint_regularity": 1.0
         }
       }
+    },
+    "phase2": {
+      "stack_levels": false
     }
   }
 }

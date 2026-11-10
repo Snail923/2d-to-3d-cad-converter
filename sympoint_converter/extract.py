@@ -26,7 +26,8 @@ import numpy as np
 from shapely.geometry import LineString, MultiPoint, Point, Polygon
 from shapely.strtree import STRtree
 
-from architectural_converter.geometry.geometric_utils import canonical_dir, dot, frame_point, mrr_dims
+from architectural_converter.geometry.geometric_utils import (canonical_dir, dot, frame_point, make_valid_polygonal,
+                                                             mrr_dims, robust_intersection)
 from architectural_converter.models.column import Column
 from architectural_converter.models.opening import Opening
 from architectural_converter.models.stair import Stair
@@ -407,7 +408,7 @@ class Extractor:
             if not closed or self.group_of_raw(g.raw_id)[0] != "wall":
                 continue
             try:
-                poly = Polygon(g.points).buffer(0)
+                poly = make_valid_polygonal(Polygon(g.points))
             except Exception:  # noqa: BLE001
                 continue
             if poly.is_empty or poly.area <= 0:
@@ -479,7 +480,7 @@ class Extractor:
         poly = w.polygon()
         for v in long_walls:
             pv = v.polygon()
-            if pv is not None and pv.intersection(poly).area >= 0.5 * poly.area and \
+            if pv is not None and robust_intersection(pv, poly).area >= 0.5 * poly.area and \
                     self._in_wall_line(v, [x for x in long_walls if x is not v]):
                 return True
         return False

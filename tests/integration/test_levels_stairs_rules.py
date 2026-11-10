@@ -108,3 +108,19 @@ def test_unreachable_room_gets_its_door():
     o2 = st2.building.openings[oid]
     assert o2.type == "door" and o2.subtype == "sliding_or_closet" and o2.status == Status.ACCEPTED
     assert o2.status_reason == "manual correction"
+
+
+def test_floors_can_stay_side_by_side_in_3d():
+    """stack_levels false: every floor plan stays where it is drawn, at ground level (used by
+    approach 2 and the web app's 'stack floors' switch)."""
+    from architectural_converter.reconstruction3d import build_3d
+    import numpy as np
+    doc, _ = build_permit_set()
+    st = _run(doc, "permit_flat.dxf")
+    stacked = build_3d(st.model, PipelineConfig())
+    flat = build_3d(st.model, PipelineConfig({"phase2": {"stack_levels": False}}))
+    assert stacked.metadata["stacked_in_3d"] and not flat.metadata["stacked_in_3d"]
+    zmax = lambda m3: max(float(np.max(m["vertices"][:, 2])) for m in m3.meshes)  # noqa: E731
+    assert zmax(stacked) > 9.0 and zmax(flat) < 3.5                    # 4 floors vs one storey high
+    xs = lambda m3: np.ptp(np.vstack([m["vertices"] for m in m3.meshes])[:, 0])  # noqa: E731
+    assert xs(flat) > xs(stacked) * 2                                   # the plans stay side by side

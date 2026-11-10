@@ -284,7 +284,15 @@ async function runSymPoint(name, buf) {
       setLoading("SymPointV2 labels for this drawing are already known (cached)");
     }
     setLoading("Building walls, doors and windows from the labels…");
-    S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config }, [buf]));
+    try {
+      S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf.slice(0), response: resp, config }));
+    } catch (e) {
+      // a geometry error in an optional step: retry once without them (like approach 1's safe mode)
+      if (!/Topology|GEOS|non-noded|depth mismatch|IllegalArgument/i.test(e.message)) throw e;
+      setLoading("Geometry error (" + e.message.slice(0, 80) + "…) — retrying in safe mode");
+      S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config, safe: true }, [buf]));
+      S.results.sympoint.safeMode = true;
+    }
     if (S.show) S.corrByMethod[S.show] = S.corrections;
     S.show = null;
     await show("sympoint");
@@ -292,7 +300,8 @@ async function runSymPoint(name, buf) {
     $("#spBadge").textContent = "on";
     $("#spStatus").innerHTML = `<span class="ok">Done:</span> ${sp.extract.labelled_entities.toLocaleString()} DXF entities labelled` +
       (sp.model_seconds ? ` in ${sp.model_seconds} s on the GPU` : "") + ".";
-    setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+      (S.results.sympoint.safeMode ? " (safe mode after a geometry error: no door rules / ground fill)" : ""));
   } catch (e) {
     if (/engine restarted|cancelled/.test(e.message)) { setStatus("Cancelled."); return; }
     const restart = /stops now|CUDA error/.test(e.message) ? " After a CUDA error the service stops itself: start it again." : "";
@@ -444,6 +453,8 @@ function load(data, keepView = false) {
   $("#levels3dBox").style.display = fl.length ? "" : "none";
   $("#levels3d").innerHTML = fl.map((l, i) => `<option value="${i}" ${i === fl.length - 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
   viewer3d.setVisible("maxLevel", fl.length ? fl.length - 1 : Infinity);
+  $("#stack3dBox").style.display = b.stacked ? "" : "none";
+  $("#stack3d").checked = !!data.mesh.metadata.stacked_in_3d;
   const d = data.mesh.metadata.defaults_used || {};
   $("#defaults3d").textContent = Object.keys(d).length ? "Defaults applied (not in drawing): " +
     Object.entries(d).map(([k, v]) => `${k}=${v.value}`).join(", ") : "";
@@ -981,3 +992,15 @@ $("#show3dFloors").addEventListener("change", (e) => viewer3d.setVisible("floor"
 $("#show3dReview").addEventListener("change", (e) => viewer3d.setVisible("review", e.target.checked));
 $("#levels3d").addEventListener("change", (e) => viewer3d.setVisible("maxLevel", +e.target.value));
 $("#show3dGlass").addEventListener("change", (e) => viewer3d.setVisible("window", e.target.checked));
+$("#stack3d").addEventListener("change", async (e) => {
+  if (!S.model || S.busy) return;
+  S.busy = true;
+  startJob(e.target.checked ? "Stacking the floors at their levels…" : "Laying the floors side by side as drawn…", false);
+  try {
+    const mesh = JSON.parse(await call("sp_mesh", { stack: e.target.checked }));
+    S.data.mesh = mesh;
+    viewer3d.setData(mesh, S.model);
+    viewer3d.setVisible("maxLevel", +$("#levels3d").value);
+  } catch (err) { alert("3D rebuild failed: " + err.message); }
+  finally { setLoading(null); S.busy = false; }
+});
