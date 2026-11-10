@@ -55,6 +55,17 @@
         <button class="tool" data-tool="addwall" title="Click start and end point to add a missing wall">Add wall</button>
         <button class="tool" data-tool="connect" title="Click two wall end points to connect them">Connect endpoints</button>
         <button class="tool" data-tool="room" title="Click room corners; double-click or Enter to finish">Draw room</button>
+        <span class="sep"></span>
+        <button class="tool" data-tool="delete" title="Click a wall, door, window, column, stair or room to delete it (Delete key: the selected element)">Delete</button>
+        <button class="tool" data-tool="cutwall" title="Click two points on a wall: the part between them is removed (the wall is shortened or split)">Cut wall part</button>
+        <button class="tool" data-tool="moveend" title="Click a wall end, then its new position (extend, shorten or re-aim the wall)">Move wall end</button>
+        <span class="sep"></span>
+        <button class="tool" data-tool="adddoor" title="Click the two ends of a door on a wall">Add door</button>
+        <button class="tool" data-tool="addwindow" title="Click the two ends of a window on a wall">Add window</button>
+        <button class="tool" data-tool="closeop" title="Click a door, window or gap: the opening is closed, the wall runs through">Close opening</button>
+        <span class="sep"></span>
+        <button class="tool" data-tool="addfloor" title="Click the corners of a floor area to add (double-click or Enter to finish)">Add floor</button>
+        <button class="tool" data-tool="cutfloor" title="Click the corners of a floor area to remove: a void, a stair opening, floor outside the building (double-click or Enter to finish)">Cut floor</button>
         <label class="small">thickness (m) <input id="thick" type="number" step="0.01" min="0" placeholder="unknown" value="0.15"></label>
         <span class="sep"></span>
         <span id="showSwitch" class="seg" style="display:none" title="Both methods ran: choose which result to review, edit and export">

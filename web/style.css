@@ -28,7 +28,11 @@ main { display: flex; height: calc(100% - 52px - 26px); }
 .sep { flex: 1; }
 #svgwrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fbfbfd; }
 #svg { width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
-#svg.tool-addwall, #svg.tool-connect, #svg.tool-room { cursor: crosshair; }
+#svg.tool-addwall, #svg.tool-connect, #svg.tool-room, #svg.tool-cutwall, #svg.tool-moveend, #svg.tool-adddoor, #svg.tool-addwindow, #svg.tool-addfloor, #svg.tool-cutfloor { cursor: crosshair; }
+#svg.tool-delete, #svg.tool-closeop { cursor: not-allowed; }
+.toolbar { flex-wrap: wrap; row-gap: 4px; }
+#svg .pending.cut { stroke: #e02020; fill: #e02020; fill-opacity: .15; }
+#svg .pending.add { stroke: #1a9c4b; fill: #1a9c4b; fill-opacity: .15; }
 .hint { position: absolute; left: 10px; bottom: 10px; background: rgba(31,42,68,.85); color: #fff; padding: 5px 9px; border-radius: 6px; font-size: 12px; display: none; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #889; font-size: 15px; pointer-events: none; }
 #view3d { flex: 1; min-height: 0; position: relative; }

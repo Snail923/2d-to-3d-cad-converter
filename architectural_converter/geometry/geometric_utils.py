@@ -294,3 +294,20 @@ def near_mask(points: np.ndarray, polys, dist: float, tree=None) -> np.ndarray:
     idx = tree.query_nearest(geoms, max_distance=dist, all_matches=False)
     mask[np.unique(idx[0])] = True
     return mask
+
+
+def hole_free(geom, depth: int = 0) -> list:
+    """Polygons without holes that together cover ``geom``: a polygon with holes is cut along a
+    vertical line through each hole (simple rings can be extruded / ear-clipped directly)."""
+    from shapely.geometry import box as _box
+    out = []
+    for p in polygons_of(geom):
+        if not p.interiors or depth > 40:
+            if p.area > 0:
+                out.append(Polygon(p.exterior) if depth > 40 else p)
+            continue
+        x = p.interiors[0].centroid.x if not p.interiors[0].is_empty else Polygon(p.interiors[0]).representative_point().x
+        x0, y0, x1, y1 = p.bounds
+        for half in (_box(x0 - 1, y0 - 1, x, y1 + 1), _box(x, y0 - 1, x1 + 1, y1 + 1)):
+            out.extend(hole_free(robust_intersection(p, half), depth + 1))
+    return out

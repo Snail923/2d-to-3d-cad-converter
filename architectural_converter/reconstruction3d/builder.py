@@ -155,7 +155,10 @@ def build_3d(model: dict, cfg) -> Model3D:
     slab = p2["slab_thickness_m"]
     for r in view["rooms"]:
         if r.get("polygon"):
-            V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
+            if r.get("floor_parts") is not None:         # a manual floor cut went through this room
+                V, F = _merge([extrude(q, -slab, 0.0) for q in r["floor_parts"]]) if r["floor_parts"] else (np.zeros((0, 3)), np.zeros((0, 3), int))
+            else:
+                V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
             out.add(r["id"], "floor", r.get("classification"), V, F,
                     COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
     ground_levels = _ground(out, model, view, p2, levels, stacked)

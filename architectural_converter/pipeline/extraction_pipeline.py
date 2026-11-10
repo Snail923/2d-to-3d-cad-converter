@@ -256,6 +256,18 @@ class ExtractionPipeline:
                 o.status = Status.NEEDS_REVIEW if o.confidence >= th["review"] else Status.REJECTED
         st._generic = generic
         st.logs["reconstruct"] = log
+        # manual geometry edits (cut / move walls, add / move openings) on the reconstructed walls
+        if any(corr.get(k) for k in ("wall_edits", "wall_cuts", "added_openings", "opening_edits")):
+            from .corrections import apply_geometry_edits
+            try:
+                st.logs["reconstruct"]["manual_edits"] = apply_geometry_edits(st.walls, st.doors, st.windows, generic, corr)
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "reconstruct", "severity": "warning",
+                                          "message": f"manual geometry edits skipped: {type(e).__name__}: {e}"})
+            # wall pieces and openings made by the edits can be deleted / accepted like any other
+            ov = corr.get("status_overrides", {})
+            apply_status_overrides([e for e in st.walls + st.doors + st.windows + generic
+                                    if e.id in ov and e.status.value != ov[e.id]], corr)
 
     def _stage_topology(self, st):
         cfg = self.cfg
@@ -288,6 +300,10 @@ class ExtractionPipeline:
             dlog = {"error": f"{type(e).__name__}: {e}"}
             st.drawing.issues.append({"stage": "topology", "severity": "warning",
                                       "message": f"door rules (door line) skipped: {dlog['error']}"})
+        # walls added by the door / room-name rules can be deleted / accepted like any other
+        apply_status_overrides([w for w in walls if w.manual_status is None
+                                and w.detection_methods & {"door_implied", "label_implied"}], st.corrections)
+        openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
         live = [w for w in walls if w.status != Status.REJECTED]
         # walls whose openings were all rejected stay closed; rejected openings detach from hosts
         for w in walls:
@@ -492,8 +508,38 @@ class ExtractionPipeline:
             out.append((p, lid))
         return out
 
+    def _manual_floors(self, st, pieces):
+        """added_floors / floor_cuts of the corrections: [(polygon, level)] with them applied; rooms
+        touched by a cut get ``floor_parts`` (their floor without the cut)."""
+        from shapely.geometry import box as _box
+        from .corrections import floor_polygons
+        from ..geometry.geometric_utils import hole_free, robust_difference, robust_union
+        add, cuts = floor_polygons(st.corrections, "added_floors"), floor_polygons(st.corrections, "floor_cuts")
+        b = st.building
+        for r in b.rooms.values():
+            r.__dict__.pop("floor_parts", None)
+        if not add and not cuts:
+            return pieces
+        plans = [(lv.id, _box(*lv.bbox)) for lv in b.levels if lv.kind == "floor_plan"] if b.levels else []
+        level = lambda g: next((i for i, bx in plans if bx.contains(g.representative_point())), None)  # noqa: E731
+        pieces = list(pieces) + [(p, level(p)) for p in add]
+        if cuts:
+            cut = robust_union(cuts)
+            pieces = [(q, lid) for p, lid in pieces for q in hole_free(robust_difference(p, cut)) if q.area > 0.01]
+            for r in b.rooms.values():
+                if r.polygon is not None and r.status != Status.REJECTED and r.polygon.intersects(cut):
+                    r.__dict__["floor_parts"] = [q for q in hole_free(robust_difference(r.polygon, cut)) if q.area > 0.01]
+        st._floor_cut = robust_union(cuts) if cuts else None
+        return pieces
+
     def _check_ground(self, st, rep):
         pieces = self.ground_pieces(st)
+        st._floor_cut = None
+        try:
+            pieces = self._manual_floors(st, pieces)
+        except Exception as e:  # noqa: BLE001
+            st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                      "message": f"manual floor edits skipped: {type(e).__name__}: {e}"})
         st.ground = pieces
         for p, _ in pieces:
             c = p.representative_point()
@@ -555,6 +601,15 @@ class ExtractionPipeline:
             except Exception as e:  # noqa: BLE001
                 st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                           "message": f"overhang limit of the level outlines skipped: {type(e).__name__}: {e}"})
+        cut = getattr(st, "_floor_cut", None)
+        if cut is not None:                     # manual floor cuts go through the storey slabs too (stair voids)
+            from ..geometry.geometric_utils import hole_free, robust_difference
+            for lv in b.levels:
+                if lv.kind == "floor_plan" and lv.outline:
+                    try:
+                        lv.outline = [q for p in lv.outline for q in hole_free(robust_difference(p, cut)) if q.area > 0.01]
+                    except Exception:  # noqa: BLE001
+                        pass
         st.logs["level_outlines"] = log
 
     def _stage_export(self, st):

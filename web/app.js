@@ -62,7 +62,12 @@ const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colo
 try { Object.assign(SPC, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
 function saveSpc() { try { localStorage.setItem(SP_KEY, JSON.stringify(SPC)); } catch { /* private mode */ } }
 const METHOD_NAME = { rules: "approach 1 (rules)", sympoint: "approach 2 (SymPointV2)" };
-function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {} }; }
+function emptyCorr() {
+  return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {},
+    wall_edits: {}, wall_cuts: [], added_openings: [], opening_edits: {}, added_floors: [], floor_cuts: [] };
+}
+const POLY_TOOLS = new Set(["room", "addfloor", "cutfloor"]);       // click corners, finish with Enter / double-click
+const PICK_TOOLS = new Set(["delete", "closeop"]);                  // click an element
 
 function setStatus(t) { $("#status").textContent = t; }
 // loading panel with a live step log, elapsed time and a cancel button for long drawings
@@ -658,6 +663,8 @@ svg.addEventListener("click", (ev) => {
     }
     return;
   }
+  if (PICK_TOOLS.has(S.tool)) { pickTool(toWorld(ev), ev); return; }
+  if (["cutwall", "moveend", "adddoor", "addwindow"].includes(S.tool)) { twoPointTool(toWorld(ev)); return; }
   const p = snap(toWorld(ev));
   if (S.tool === "addwall" || S.tool === "connect") {
     S.draft.push(p);
@@ -672,23 +679,124 @@ svg.addEventListener("click", (ev) => {
         note: S.tool === "connect" ? "manual endpoint connection" : "manual wall" }));
       S.draft = [];
     }
-  } else if (S.tool === "room") {
+  } else if (POLY_TOOLS.has(S.tool)) {
     S.draft.push(p);
   }
   drawDraft(p);
 });
-svg.addEventListener("dblclick", (ev) => { if (S.tool === "room") finishRoom(); });
+svg.addEventListener("dblclick", (ev) => { if (POLY_TOOLS.has(S.tool)) finishRoom(); });
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { S.draft = []; drawDraft(null); }
-  if (ev.key === "Enter" && S.tool === "room") finishRoom();
+  if (ev.target && /INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
+  if (ev.key === "Escape") { S.draft = []; S.moveWall = null; drawDraft(null); }
+  if (ev.key === "Enter" && POLY_TOOLS.has(S.tool)) finishRoom();
+  if ((ev.key === "Delete" || ev.key === "Backspace") && S.selected && S.byId.has(S.selected) && S.model) {
+    const it = S.byId.get(S.selected);
+    if (["wall", "opening", "room", "column", "stair"].includes(it.kind)) {
+      ev.preventDefault();
+      addCorr(() => { S.corrections.status_overrides[S.selected] = "REJECTED"; }, true);
+    }
+  }
 });
 function finishRoom() {
   const pts = dedupe(S.draft);
   S.draft = [];
   drawDraft(null);
   if (pts.length < 3) return;
+  if (S.tool === "addfloor") { addCorr(() => S.corrections.added_floors.push({ polygon: pts })); return; }
+  if (S.tool === "cutfloor") { addCorr(() => S.corrections.floor_cuts.push({ polygon: pts })); return; }
   const name = prompt("Room name (optional):", "") || null;
   addCorr(() => S.corrections.room_overrides.push({ polygon: pts, name }));
+}
+
+// ---- editing tools: geometry helpers (model coordinates, metres)
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1e-12;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return [Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)), t];
+}
+function liveWalls() { return S.model.walls.filter((w) => w.status !== "REJECTED" && w.geometry && w.geometry.start); }
+function wallAt(p) {            // the straight wall under a point (within its body + a few pixels)
+  let best = null, bd = Infinity;
+  for (const w of liveWalls()) {
+    const [d] = segDist(p, w.geometry.start, w.geometry.end);
+    if (d <= (w.thickness || 0.1) / 2 + pxToWorld(8) && d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
+function onWall(w, p) {         // p projected onto the wall's centre line (clamped to the wall)
+  const a = w.geometry.start, b = w.geometry.end, [, t] = segDist(p, a, b);
+  return [+(a[0] + t * (b[0] - a[0])).toFixed(4), +(a[1] + t * (b[1] - a[1])).toFixed(4)];
+}
+function openingAt(p) {
+  let best = null, bd = Infinity;
+  for (const o of S.model.openings) {
+    if (o.status === "REJECTED" || !o.position) continue;
+    const [d] = segDist(p, o.position.start, o.position.end);
+    if (d <= (o.depth || 0.15) / 2 + pxToWorld(8) && d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+function pickTool(p, ev) {
+  if (S.tool === "closeop") {
+    const o = openingAt(p);
+    if (!o) { flashHint("No door, window or gap here."); return; }
+    addCorr(() => { S.corrections.status_overrides[o.id] = "REJECTED"; }, true);
+    return;
+  }
+  // delete: the element under the pointer (an opening first, then what was clicked, then the wall)
+  const o = openingAt(p), t = ev.target.closest("[data-id]"), w = wallAt(p);
+  const id = o ? o.id : (t && S.byId.has(t.getAttribute("data-id")) ? t.getAttribute("data-id") : (w ? w.id : null));
+  const it = id && S.byId.get(id);
+  if (!it || !["wall", "opening", "room", "column", "stair"].includes(it.kind)) { flashHint("Nothing to delete here."); return; }
+  addCorr(() => { S.corrections.status_overrides[id] = "REJECTED"; }, true);
+}
+function twoPointTool(raw) {
+  if (S.tool === "moveend") {
+    if (!S.moveWall) {
+      let best = null, bd = pxToWorld(14);
+      for (const w of liveWalls()) for (const k of ["start", "end"]) {
+        const q = w.geometry[k], d = Math.hypot(q[0] - raw[0], q[1] - raw[1]);
+        if (d < bd) { bd = d; best = { w, k }; }
+      }
+      if (!best) { flashHint("Click closer to a wall end."); return; }
+      S.moveWall = best;
+      S.draft = [best.w.geometry[best.k === "start" ? "end" : "start"]];     // rubber line from the fixed end
+      drawDraft(raw);
+      return;
+    }
+    const { w, k } = S.moveWall, p = snap(raw);
+    const fixed = w.geometry[k === "start" ? "end" : "start"];
+    S.moveWall = null; S.draft = [];
+    if (Math.hypot(p[0] - fixed[0], p[1] - fixed[1]) < 0.02) { drawDraft(null); return; }
+    addCorr(() => {
+      const ed = S.corrections.wall_edits[w.id] || {};
+      S.corrections.wall_edits[w.id] = Object.assign(ed, k === "start" ? { start: p, end: fixed } : { start: fixed, end: p });
+    });
+    drawDraft(null);
+    return;
+  }
+  // cut wall / add door / add window: two points on one wall
+  if (!S.draft.length) {
+    const w = wallAt(raw);
+    if (!w) { flashHint("Click on a wall."); return; }
+    S.editWall = w;
+    S.draft = [onWall(w, raw)];
+    drawDraft(raw);
+    return;
+  }
+  const w = S.editWall, a = S.draft[0], b = onWall(w, raw);
+  S.draft = []; S.editWall = null;
+  drawDraft(null);
+  if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.02) return;
+  if (S.tool === "cutwall") addCorr(() => S.corrections.wall_cuts.push({ wall: w.id, start: a, end: b }));
+  else addCorr(() => S.corrections.added_openings.push({ type: S.tool === "adddoor" ? "door" : "window", wall: w.id, start: a, end: b }));
+}
+let hintTimer = null;
+function flashHint(t) {
+  const h = $("#hint"), old = h.textContent;
+  h.textContent = t; h.style.display = "block";
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { h.textContent = TOOL_HINTS[S.tool] || old; h.style.display = TOOL_HINTS[S.tool] ? "block" : "none"; }, 1800);
 }
 function dedupe(pts) { return pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-6); }
 
@@ -706,7 +814,7 @@ function snap(p) {
     if (d < bd) { bd = d; best = q; }
   }
   if (best) return [+best[0].toFixed(4), +best[1].toFixed(4)];
-  if (S.draft.length && S.tool !== "room") {  // orthogonal assist
+  if (S.draft.length && !POLY_TOOLS.has(S.tool)) {  // orthogonal assist
     const a = S.draft[S.draft.length - 1];
     const dx = Math.abs(p[0] - a[0]), dy = Math.abs(p[1] - a[1]);
     if (dy < pxToWorld(8)) return [p[0], a[1]];
@@ -730,33 +838,48 @@ function drawDraft(cur) {
   if (!g) return;
   g.innerHTML = "";
   const pts = S.draft.slice();
-  if (cur && S.tool !== "select") {
-    const s = snap(cur);
+  if (cur && S.tool !== "select" && !PICK_TOOLS.has(S.tool)) {
+    const s = S.editWall ? onWall(S.editWall, cur) : snap(cur);
     el("circle", { class: "snap", cx: s[0], cy: -s[1], r: pxToWorld(4) }, g);
     if (pts.length) pts.push(s);
   }
-  if (pts.length >= 2) el("path", { class: "rubber", d: pathD(pts, S.tool === "room" && pts.length > 2) }, g);
+  if (pts.length >= 2) el("path", { class: "rubber", d: pathD(pts, POLY_TOOLS.has(S.tool) && pts.length > 2) }, g);
 }
 function drawPending() {
   const g = $("#pending");
   if (!g) return;
   g.innerHTML = "";
   const applied = (S.model && S.model.corrections) || emptyCorr();
-  const same = JSON.stringify(applied.added_walls) === JSON.stringify(S.corrections.added_walls) &&
-    JSON.stringify(applied.room_overrides) === JSON.stringify(S.corrections.room_overrides);
-  if (same) return;
-  for (const w of S.corrections.added_walls) el("path", { class: "pending", d: pathD([w.start, w.end]) }, g);
-  for (const r of S.corrections.room_overrides) el("path", { class: "pending", d: pathD(r.polygon, true) }, g);
+  const c = Object.assign(emptyCorr(), S.corrections), ap = Object.assign(emptyCorr(), applied);
+  const keys = ["added_walls", "room_overrides", "wall_edits", "wall_cuts", "added_openings", "added_floors", "floor_cuts"];
+  if (keys.every((k) => JSON.stringify(ap[k]) === JSON.stringify(c[k]))) return;
+  for (const w of c.added_walls) el("path", { class: "pending", d: pathD([w.start, w.end]) }, g);
+  for (const r of c.room_overrides) el("path", { class: "pending", d: pathD(r.polygon, true) }, g);
+  for (const e of Object.values(c.wall_edits)) if (e.start) el("path", { class: "pending add", d: pathD([e.start, e.end]) }, g);
+  for (const w of c.wall_cuts) el("path", { class: "pending cut", d: pathD([w.start, w.end]) }, g);
+  for (const o of c.added_openings) el("path", { class: "pending add", d: pathD([o.start, o.end]) }, g);
+  for (const f of c.added_floors) el("path", { class: "pending add", d: pathD(f.polygon, true) }, g);
+  for (const f of c.floor_cuts) el("path", { class: "pending cut", d: pathD(f.polygon, true) }, g);
 }
 
 // tools
+const AFTER = " Then press “Re-run with corrections”.";
+const TOOL_HINTS = { select: "", addwall: "Click the start and end point of the missing wall (snaps to end points). Esc cancels.",
+  connect: "Click two wall end points to connect them with a wall of their average thickness.",
+  room: "Click the room corners, double-click or press Enter to finish. Esc cancels.",
+  delete: "Click a wall, door, window, column, stair or room to delete it (applied at once; Undo last + Re-run brings it back).",
+  cutwall: "Click two points on a wall: the part between them is removed." + AFTER,
+  moveend: "Click a wall end, then its new position." + AFTER,
+  adddoor: "Click the two ends of the door on a wall." + AFTER,
+  addwindow: "Click the two ends of the window on a wall." + AFTER,
+  closeop: "Click a door, window or gap to close it: the wall runs through (applied at once).",
+  addfloor: "Click the corners of the floor to add; double-click or Enter to finish." + AFTER,
+  cutfloor: "Click the corners of the floor to remove (void, stair opening); double-click or Enter to finish." + AFTER };
 for (const b of $$(".tool")) b.addEventListener("click", () => {
   $$(".tool").forEach((x) => x.classList.toggle("active", x === b));
-  S.tool = b.dataset.tool; S.draft = []; drawDraft(null);
+  S.tool = b.dataset.tool; S.draft = []; S.moveWall = null; S.editWall = null; drawDraft(null);
   svg.className.baseVal = svg.className.baseVal.replace(/tool-\S+/g, "") + " tool-" + S.tool;
-  const hints = { select: "", addwall: "Click the start and end point of the missing wall (snaps to end points). Esc cancels.",
-    connect: "Click two wall end points to connect them with a wall of their average thickness.",
-    room: "Click the room corners, double-click or press Enter to finish. Esc cancels." };
+  const hints = TOOL_HINTS;
   $("#hint").textContent = hints[S.tool]; $("#hint").style.display = hints[S.tool] ? "block" : "none";
   applyLayerClasses();
 });
@@ -863,8 +986,10 @@ function renderDetails(kind, o) {
   if (kind === "hypothesis") {
     buttons = `<button class="btn primary" id="accHyp">Accept as wall</button>`;
   } else if (kind !== "room_hypothesis") {
-    buttons = `<button class="btn" data-set="ACCEPTED">Accept</button> <button class="btn" data-set="REJECTED">Reject</button>
+    buttons = `<button class="btn" data-set="ACCEPTED">Accept</button> <button class="btn" data-set="REJECTED">${kind === "opening" ? "Close (wall instead)" : "Delete"}</button>
       ${ov ? `<button class="btn" data-set="">Reset (${ov})</button>` : ""}`;
+    if (kind === "wall" && o.geometry && o.geometry.start) buttons += `<div class="row small">thickness (m) <input id="editThick" type="number" step="0.01" min="0.02" style="width:70px" value="${o.thickness ? (+o.thickness).toFixed(3) : ""}"> <button class="btn small" id="setThick">Set</button></div>`;
+    if (kind === "opening" && o.type !== "opening") buttons += `<div class="row"><button class="btn small" data-otype="${o.type === "door" ? "window" : "door"}">→ ${o.type === "door" ? "window" : "door"}</button><button class="btn small" data-otype="opening">→ open passage</button></div>`;
     if (kind === "opening" && o.type === "opening") buttons += `<div class="row"><button class="btn small" data-otype="door">→ door</button><button class="btn small" data-otype="window">→ window</button></div>`;
   }
   $("#details").innerHTML = `
@@ -882,6 +1007,11 @@ function renderDetails(kind, o) {
   }, true));
   for (const b of $$("#details [data-otype]")) b.addEventListener("click", () => addCorr(() => { S.corrections.opening_type_overrides[o.id] = b.dataset.otype; }, true));
   for (const a of $$("#details [data-goto]")) a.addEventListener("click", (e) => { e.preventDefault(); select(a.dataset.goto); });
+  const st = $("#setThick");
+  if (st) st.addEventListener("click", () => {
+    const t = parseFloat($("#editThick").value);
+    if (isFinite(t) && t >= 0.02) addCorr(() => { S.corrections.wall_edits[o.id] = Object.assign(S.corrections.wall_edits[o.id] || {}, { thickness: +t.toFixed(4) }); }, true);
+  });
   const acc = $("#accHyp");
   if (acc) acc.addEventListener("click", () => addCorr(() => {
     const g = o.geometry;
@@ -892,7 +1022,9 @@ function renderDetails(kind, o) {
 // ------------------------------------------------------------------ corrections
 function countCorr() {
   const c = S.corrections;
-  return Object.keys(c.status_overrides).length + c.added_walls.length + c.room_overrides.length + Object.keys(c.opening_type_overrides).length;
+  return Object.keys(c.status_overrides).length + c.added_walls.length + c.room_overrides.length + Object.keys(c.opening_type_overrides).length +
+    Object.keys(c.wall_edits || {}).length + (c.wall_cuts || []).length + (c.added_openings || []).length +
+    Object.keys(c.opening_edits || {}).length + (c.added_floors || []).length + (c.floor_cuts || []).length;
 }
 function addCorr(fn, autoRerun = false) {
   S.history.push(JSON.stringify(S.corrections));
