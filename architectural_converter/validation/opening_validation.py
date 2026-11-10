@@ -4,6 +4,7 @@ from __future__ import annotations
 from shapely.geometry import Point
 
 from ..models.base_entity import Status
+from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 
 def validate_openings(report, openings, walls, tol, cfg):
@@ -20,7 +21,7 @@ def validate_openings(report, openings, walls, tol, cfg):
         if w is None:
             continue
         p = w.polygon(max(tol.snap * 2, 0.01))
-        if p is not None and p.buffer(max(0.05, tol.snap * 4)).distance(Point(loc)) > 0:
+        if p is not None and _sbuf(p, max(0.05, tol.snap * 4)).distance(Point(loc)) > 0:
             report.add("opening", "outside_wall", "warning", o, loc, f"{o.id} lies outside its host wall {w.id}.",
                        "Verify the opening position.", 0.6)
         rng = vc["door_width_m"] if o.type in ("door", "opening") else vc["window_width_m"]

@@ -34,6 +34,7 @@ from ..geometry.geometric_utils import robust_intersection, robust_union
 from ..models.base_entity import Status
 from ..preprocessing.layer_analyzer import category_scores
 from .wall_classifier import FACADE_LINE_NOTE
+from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 IGNORED_LAYER_CATEGORIES = ("grid", "dimension", "annotation")
 
@@ -78,7 +79,7 @@ def _contact(room, w, tol) -> float:
     poly = w.polygon(max(tol.snap * 2, 0.01))
     if poly is None or room.polygon is None:
         return 0.0
-    return float(robust_intersection(room.polygon.exterior, poly.buffer(max(tol.snap * 3, 0.02))).length)
+    return float(robust_intersection(room.polygon.exterior, _sbuf(poly, max(tol.snap * 3, 0.02))).length)
 
 
 def _free_part(seg, w, walls, tol):
@@ -88,7 +89,7 @@ def _free_part(seg, w, walls, tol):
     if seg is None or seg.is_empty:
         return seg
     reach = (w.thickness or tol.snap * 2) + tol.snap * 2
-    probe = seg.buffer(reach)
+    probe = _sbuf(seg, reach)
     cover = None
     for v in walls:
         if v is w or not v.thickness or (w.thickness and v.thickness <= 1.25 * w.thickness):
@@ -100,7 +101,7 @@ def _free_part(seg, w, walls, tol):
     if cover is None:
         return seg
     from ..geometry.geometric_utils import robust_difference
-    return robust_difference(seg, cover.buffer(reach))
+    return robust_difference(seg, _sbuf(cover, reach))
 
 
 def detect_balconies(b, cfg, tol, drawing=None) -> dict:
@@ -163,7 +164,7 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
             poly = w.polygon(max(tol.snap * 2, 0.01)) if w is not None else None
             if poly is None:
                 continue
-            seg = robust_intersection(ring, poly.buffer(pad))
+            seg = robust_intersection(ring, _sbuf(poly, pad))
             if seg.length <= tol.snap:
                 continue
             contact[wid] = seg.length
@@ -173,7 +174,7 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
                 # (+ one more light element: balconies often show a slab edge / planter line
                 # just outside the railing)
                 reach = (w.thickness or tol.snap * 2) + extra + pad
-                part = robust_intersection(seg, outline_zone.buffer(reach))
+                part = robust_intersection(seg, _sbuf(outline_zone, reach))
                 on_outline[wid] = part.length
                 rail_segs[wid] = part
         # union, not sum: overlapping duplicate walls and corner pieces must not count twice

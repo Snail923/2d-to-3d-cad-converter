@@ -5,6 +5,7 @@ from ..geometry.geometric_utils import bbox_pad, polygons_of, sample_points
 
 from ..models.base_entity import Status
 from .architectural_rules import building_footprint, partition_threshold
+from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 
 def classify_walls(walls, solid, tol, cfg):
@@ -69,7 +70,7 @@ def inherit_facade(walls, tol, min_share: float = 0.5) -> int:
             v = ext[int(k)]
             if v is w or (v.thickness and w.thickness and v.thickness < w.thickness):
                 continue
-            cover = max(cover, robust_intersection(ax, v.polygon().buffer(tol.snap)).length)
+            cover = max(cover, robust_intersection(ax, _sbuf(v.polygon(), tol.snap)).length)
         if cover >= min_share * ax.length:
             w.classification = "exterior_wall"
             w.notes.append(FACADE_LINE_NOTE)

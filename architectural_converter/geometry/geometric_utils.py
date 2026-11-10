@@ -134,6 +134,8 @@ def safe_buffer(geom, dist, **kw):
     caught: the input is snapped to a fine precision grid first (removes near-coincident
     vertices / zero-width spikes that trigger 'depth mismatch')."""
     try:
+        if geom.geom_type in ("Polygon", "MultiPolygon") and not geom.is_valid:
+            geom = make_valid_polygonal(geom)      # e.g. a bow-tie arc wall body
         from shapely import set_precision
         g = set_precision(geom, 1e-7)
     except Exception:

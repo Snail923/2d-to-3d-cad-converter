@@ -18,6 +18,7 @@ changed for candidates that carry a manual status."""
 from __future__ import annotations
 
 from ..models.base_entity import Status
+from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 # a window *symbol* recognised by geometry alone is not strong evidence: furniture blocks have
 # the same signature (equal parallel lines). Only names and layers that say "window" are.
@@ -36,7 +37,7 @@ def band_share(o, host, tol) -> float | None:
     if poly is None:
         return None
     from ..geometry.geometric_utils import robust_intersection
-    return float(robust_intersection(fp, poly.buffer(tol.snap)).area / fp.area)
+    return float(robust_intersection(fp, _sbuf(poly, tol.snap)).area / fp.area)
 
 
 def apply_plausibility(b, cfg, locked=frozenset(), tol=None) -> dict:
