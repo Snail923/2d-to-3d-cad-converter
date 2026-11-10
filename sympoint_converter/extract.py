@@ -27,7 +27,7 @@ from shapely.geometry import LineString, MultiPoint, Point, Polygon
 from shapely.strtree import STRtree
 
 from architectural_converter.geometry.geometric_utils import (canonical_dir, dot, frame_point, make_valid_polygonal,
-                                                             mrr_dims, robust_intersection)
+                                                             mrr_dims, robust_intersection, safe_buffer)
 from architectural_converter.models.column import Column
 from architectural_converter.models.opening import Opening
 from architectural_converter.models.stair import Stair
@@ -130,7 +130,7 @@ class Extractor:
         score_of = dict(W)
         idx = [k for k, _ in W]
         self._wall_idx = idx
-        tree = STRtree([strokes[k].line().buffer(tmax) for k in idx])
+        tree = STRtree([safe_buffer(strokes[k].line(), tmax) for k in idx])
         ang_tol = math.radians(c["parallel_deg"])
         pairs = []
         for a_i, i in enumerate(idx):
@@ -437,7 +437,7 @@ class Extractor:
         # closed polyline) is a wall, not a column
         piers = 0
         for cc in list(cols):
-            inside = [w for w in long_walls if cc.polygon.buffer(0.01).contains(w.polygon())]
+            inside = [w for w in long_walls if safe_buffer(cc.polygon, 0.01).contains(w.polygon())]
             if inside and any(self._in_wall_line(w, [v for v in long_walls if v is not w]) for w in inside):
                 cols.remove(cc)
                 piers += 1
@@ -454,12 +454,12 @@ class Extractor:
                 if ends == 2 and not self._in_wall_line(w, long_walls) and \
                         lo <= min(w.thickness, w.length) and max(w.thickness, w.length) <= hi:
                     poly = w.polygon()
-                    if not any(cc.polygon.buffer(0.01).intersects(poly) for cc in cols):
+                    if not any(safe_buffer(cc.polygon, 0.01).intersects(poly) for cc in cols):
                         cols.append(self._column(poly, set(w.source_entities), "rectangular"))
                     continue
                 keep.append(w)                 # a short wall nib / pier
                 continue
-            if w.kind == "straight" and any(cc.polygon.buffer(0.01).contains(w.polygon()) for cc in cols):
+            if w.kind == "straight" and any(safe_buffer(cc.polygon, 0.01).contains(w.polygon()) for cc in cols):
                 continue                     # the two sides of a column outline paired as a "wall"
             keep.append(w)
         self.log["end_cap_pairs_dropped"] = caps
@@ -474,7 +474,7 @@ class Extractor:
         tol = max(self.tol.snap * 2, 0.01)
         lo, hi = w.c - w.thickness / 2, w.c + w.thickness / 2
         ends = {0: [], 1: []}
-        band = w.polygon().buffer(tol)
+        band = safe_buffer(w.polygon(), tol)
         for k in self._wall_idx:
             st = strokes[k]
             if abs(dot(st.u, w.u)) > 0.05 or not band.intersects(st.line()):
@@ -522,9 +522,9 @@ class Extractor:
     def _dedupe_columns(self, cols):
         out = []
         for cc in sorted(cols, key=lambda x: -x.polygon.area):
-            if any(o.polygon.buffer(0.01).contains(cc.polygon.centroid) for o in out):
+            if any(safe_buffer(o.polygon, 0.01).contains(cc.polygon.centroid) for o in out):
                 for o in out:
-                    if o.polygon.buffer(0.01).contains(cc.polygon.centroid):
+                    if safe_buffer(o.polygon, 0.01).contains(cc.polygon.centroid):
                         o.source_entities |= cc.source_entities
                 continue
             out.append(cc)
@@ -559,7 +559,7 @@ class Extractor:
                     x = parent[x]
                 return x
             for a, g in enumerate(geoms):
-                for b in tree.query(g.buffer(gap)):
+                for b in tree.query(safe_buffer(g, gap)):
                     b = int(b)
                     if b > a and geoms[b].distance(g) <= gap:
                         parent[find(a)] = find(b)
@@ -580,7 +580,7 @@ class Extractor:
         """Nearest straight wall to a symbol: (wall, distance) or (None, inf)."""
         hull = MultiPoint([tuple(p) for p in pts]).convex_hull
         best = (None, math.inf)
-        for k in tree.query(hull.buffer(search)):
+        for k in tree.query(safe_buffer(hull, search)):
             w = walls[int(k)]
             d = w.polygon(self.c["nominal_thickness_m"]).distance(hull)
             if d < best[1]:
@@ -649,7 +649,7 @@ class Extractor:
             L = math.hypot(*d)
             if L <= 0:
                 continue
-            for k in tree.query(probe.buffer(self.c["host_search_m"])):
+            for k in tree.query(safe_buffer(probe, self.c["host_search_m"])):
                 w = straight[int(k)]
                 if abs(dot(d, w.u)) / L < 0.95:
                     continue

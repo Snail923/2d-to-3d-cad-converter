@@ -284,18 +284,34 @@ async function runSymPoint(name, buf) {
       setLoading("SymPointV2 labels for this drawing are already known (cached)");
     }
     setLoading("Building walls, doors and windows from the labels…");
-    try {
-      S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf.slice(0), response: resp, config }));
-    } catch (e) {
-      // a geometry error in an optional step: retry once without them (like approach 1's safe mode)
-      if (!/Topology|GEOS|non-noded|depth mismatch|IllegalArgument/i.test(e.message)) throw e;
-      setLoading("Geometry error (" + e.message.trim().split("\n").pop().slice(0, 80) + "…) — retrying in safe mode");
+    // A geometry (GEOS) error aborts the whole Python engine in the browser: no traceback is
+    // possible. Remember the step it died in, restart the engine and retry once in safe mode.
+    const FATAL = /Topology|GEOS|non-noded|depth|fatally failed|Pyodide already|memory access|unreachable/i;
+    const attempt = async (safe) => {
       try {
-        S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config, safe: true }, [buf]));
-      } catch (e2) {
-        throw new Error(e.message + "\n\n--- retry in safe mode also failed ---\n" + e2.message);
+        return JSON.parse(await call("sp_process", { name, bytes: buf.slice(0), response: resp, config, safe }));
+      } catch (e) {
+        if (!FATAL.test(e.message)) throw e;
+        const step = S.lastProgress || "?";
+        setLoading("The Python engine crashed (geometry error) during “" + step + "” — restarting it…");
+        try { await recoverEngine(); } catch (e2) { /* reported below */ }
+        e.step = step;
+        throw e;
       }
-      S.results.sympoint.safeMode = true;
+    };
+    try {
+      S.results.sympoint = await attempt(false);
+    } catch (e) {
+      if (!e.step) throw e;
+      const first = `${e.message.trim().split("\n").pop()}\n  during: ${e.step}`;
+      startJob(`Approach 2: retrying ${name} in safe mode (no missing-room recovery, door rules, ground fill)…`);
+      try {
+        S.results.sympoint = await attempt(true);
+        S.results.sympoint.safeMode = first;
+      } catch (e2) {
+        throw new Error(`${first}\n\n--- retry in safe mode (fresh engine) also failed ---\n` +
+          `${e2.message.trim().split("\n").pop()}` + (e2.step ? `\n  during: ${e2.step}` : ""));
+      }
     }
     if (S.show) S.corrByMethod[S.show] = S.corrections;
     S.show = null;
@@ -305,7 +321,8 @@ async function runSymPoint(name, buf) {
     $("#spStatus").innerHTML = `<span class="ok">Done:</span> ${sp.extract.labelled_entities.toLocaleString()} DXF entities labelled` +
       (sp.model_seconds ? ` in ${sp.model_seconds} s on the GPU` : "") + ".";
     setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
-      (S.results.sympoint.safeMode ? " (safe mode after a geometry error: no door rules / ground fill)" : ""));
+      (S.results.sympoint.safeMode ? " (safe mode after a geometry error: no door rules / ground fill — see the SymPointV2 panel)" : ""));
+    if (S.results.sympoint.safeMode) $("#spStatus").innerHTML += `<details><summary>first attempt crashed (details)</summary><pre class="mono small" style="white-space:pre-wrap">${esc(S.results.sympoint.safeMode)}</pre></details>`;
   } catch (e) {
     if (/engine restarted|cancelled/.test(e.message)) { setStatus("Cancelled."); return; }
     const restart = /stops now|CUDA error/.test(e.message) ? " After a CUDA error the service stops itself: start it again." : "";
