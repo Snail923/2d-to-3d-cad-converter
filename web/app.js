@@ -1018,7 +1018,18 @@ for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ tabs + 3D
-const viewer3d = new Viewer3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+// The 3D view needs WebGL. When the browser cannot create it (GPU busy or blocked, hardware
+// acceleration off), the rest of the app keeps working and the 3D tab says why.
+let viewer3d;
+try {
+  viewer3d = new Viewer3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+} catch (e) {
+  console.error("3D viewer unavailable:", e);
+  viewer3d = { setData() {}, setVisible() {}, highlight() {}, resize() {} };
+  $("#view3d").innerHTML = `<p class="small" style="padding:16px"><b class="err">The 3D view could not start:</b> ${esc(e.message || e)}<br>
+    The browser did not give this page a WebGL context. Close other tabs that use 3D / the GPU, check that hardware
+    acceleration is on (chrome://gpu), then reload. 2D review, validation and all exports (including .glb) still work.</p>`;
+}
 function showTab(id) {
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === id));
