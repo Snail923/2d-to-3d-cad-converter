@@ -41,5 +41,15 @@
       "sottotetto"
     ],
     "max_overhang_m": 3.0
+  },
+  "pitched_roof": {
+    "_doc": "Attic / roof storeys (level name matches level_slabs.no_roof_names) get a pitched hip roof (reconstruction3d/roof.py) instead of an open top: every side of the storey's outline carries a plane rising inwards at pitch_deg, the outline is grown by overhang_m for the eaves, the roof starts knee_wall_m above the attic floor and rises at most to the storey height (max_height_m overrides; where the planes would go higher the roof is flat). The attic's walls, columns and glazing are trimmed under the slope.",
+    "enabled": true,
+    "pitch_deg": 30.0,
+    "overhang_m": 0.4,
+    "knee_wall_m": 1.0,
+    "max_height_m": null,
+    "contours": 12,
+    "min_area_m2": 10.0
   }
 }

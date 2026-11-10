@@ -508,6 +508,50 @@ class ExtractionPipeline:
             out.append((p, lid))
         return out
 
+    def _attic_roofs(self, st, lc, log):
+        """Footprint of the pitched roof of attic / roof storeys: the storey's walled part (walls
+        that are not railings and the rooms that are not terraces, gaps closed), else its outline."""
+        from ..geometry.geometric_utils import polygons_of, robust_union, safe_buffer
+        from shapely.geometry import Polygon as _Polygon
+        pr = self.cfg["phase2"].get("pitched_roof", {})
+        names = [n.lower() for n in lc.get("no_roof_names", [])]
+        b = st.building
+        for lv in b.levels:
+            lv.roof = None
+            if lv.kind != "floor_plan" or not pr.get("enabled", True) or not lv.outline \
+                    or not any(n in (lv.name or "").lower() for n in names):
+                continue
+            try:
+                live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
+                geoms = [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis
+                         and w.classification != "railing"]
+                geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis
+                          and r.classification != "balcony"]
+                geoms = [g for g in geoms if g is not None and not g.is_empty]
+                rings, source = [], "outline"
+                if geoms:
+                    u = robust_union(geoms)
+                    closed = safe_buffer(safe_buffer(u, 2.0, join_style=2), -2.0, join_style=2)
+                    parts = [_Polygon(p.exterior) for p in polygons_of(closed) if p.area >= pr.get("min_area_m2", 10.0)]
+                    if parts and sum(p.area for p in parts) >= 0.3 * sum(p.area for p in lv.outline):
+                        rings, source = parts, "walled part"
+                if not rings:
+                    rings = [p for p in lv.outline if p.area >= pr.get("min_area_m2", 10.0)]
+                over = float(pr.get("overhang_m", 0.4))
+                if over > 0:
+                    rings = [_Polygon(q.exterior) for p in rings for q in polygons_of(safe_buffer(p, over, join_style=2))]
+                rings = [p.simplify(0.05) for p in rings]
+                rings = [p for p in rings if p.geom_type == "Polygon" and p.is_valid and p.area > 0]
+                if rings:
+                    lv.roof = {"kind": "pitched", "source": source,
+                               "footprint": [[[round(float(x), 4), round(float(y), 4)] for x, y in p.exterior.coords]
+                                             for p in rings]}
+                    log.setdefault(lv.id, {})["roof"] = {"kind": "pitched", "source": source,
+                                                          "area_m2": round(sum(p.area for p in rings), 2)}
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"roof of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})
+
     def _manual_floors(self, st, pieces):
         """added_floors / floor_cuts of the corrections: [(polygon, level)] with them applied; rooms
         touched by a cut get ``floor_parts`` (their floor without the cut)."""
@@ -601,6 +645,7 @@ class ExtractionPipeline:
             except Exception as e:  # noqa: BLE001
                 st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                           "message": f"overhang limit of the level outlines skipped: {type(e).__name__}: {e}"})
+        self._attic_roofs(st, lc, log)
         cut = getattr(st, "_floor_cut", None)
         if cut is not None:                     # manual floor cuts go through the storey slabs too (stair voids)
             from ..geometry.geometric_utils import hole_free, robust_difference

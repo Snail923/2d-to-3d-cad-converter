@@ -17,7 +17,7 @@ COLORS = {"exterior_wall": [0.80, 0.78, 0.74, 1.0], "interior_wall": [0.92, 0.90
           "partition_wall": [0.95, 0.95, 0.93, 1.0], "wall": [0.88, 0.86, 0.82, 1.0],
           "railing": [0.55, 0.60, 0.66, 1.0], "balcony": [0.66, 0.70, 0.72, 1.0], "ground": [0.70, 0.68, 0.62, 1.0],
           "column": [0.62, 0.60, 0.58, 1.0], "floor": [0.76, 0.66, 0.52, 1.0],
-          "stair": [0.70, 0.55, 0.42, 1.0], "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
+          "roof_tiles": [0.72, 0.36, 0.25, 1.0], "stair": [0.70, 0.55, 0.42, 1.0], "review": [0.98, 0.75, 0.45, 1.0], "glass": [0.55, 0.75, 0.95, 0.45]}
 
 
 class Model3D:
@@ -164,6 +164,7 @@ def build_3d(model: dict, cfg) -> Model3D:
     ground_levels = _ground(out, model, view, p2, levels, stacked)
     if stacked and p2.get("stack_levels", True):
         ground_levels.update(_level_slabs(out, p2, levels))
+        _pitched_roofs(out, p2, levels, view, ground_levels)
     # stack_levels false: every floor stays where it is drawn, side by side on the ground
     out.metadata["stacked_in_3d"] = bool(stacked and p2.get("stack_levels", True))
     if stacked and p2.get("stack_levels", True):
@@ -233,9 +234,11 @@ def _level_slabs(out, p2, levels) -> dict:
         H = lv.get("height") or p2["wall_height_m"]
         name = (lv.get("name") or "").lower()
         open_top = any(n in name for n in no_roof)
+        pitched = bool(open_top and (lv.get("roof") or {}).get("kind") == "pitched"
+                       and p2.get("pitched_roof", {}).get("enabled", True))
         top = k == len(plans) - 1
         made = {"level": lv["id"], "name": lv.get("name"), "outline": lv.get("outline_source"), "base": False,
-                "roof": False if not open_top else "open (attic / roof storey)"}
+                "roof": False if not open_top else ("pitched" if pitched else "open (attic / roof storey)")}
         try:
             base = _merge([extrude(r, -slab + eps, -eps) for r in rings]) if rings else None
             if top:
@@ -257,6 +260,54 @@ def _level_slabs(out, p2, levels) -> dict:
         info.append(made)
     out.metadata["level_slabs"] = info
     return level_of
+
+
+def _pitched_roofs(out, p2, levels, view, level_of) -> None:
+    """Attic / roof storeys: a tiled hip roof over the footprint Phase 1 gives (building.levels[].roof),
+    and everything of that storey trimmed under its slope (the attic room is inside the roof).
+    Runs before the storeys are moved to their levels: z = 0 is the attic floor."""
+    from .roof import hip_roof, roof_height_at
+    pr = p2.get("pitched_roof", {})
+    if not pr.get("enabled", True):
+        return
+    of = {e["id"]: e.get("level") for k in ("walls", "openings", "columns", "stairs") for e in view.get(k, [])}
+    for lv in levels.values():
+        roof = lv.get("roof") or {}
+        if lv.get("kind") != "floor_plan" or roof.get("kind") != "pitched" or not roof.get("footprint"):
+            continue
+        pitch = float(pr.get("pitch_deg", 30.0))
+        over, knee = float(pr.get("overhang_m", 0.4)), float(pr.get("knee_wall_m", 1.0))
+        total = pr.get("max_height_m") or lv.get("height") or p2["wall_height_m"]
+        eave = knee - over * np.tan(np.radians(pitch))         # the eave hangs below the knee-wall top
+        max_rise = max(0.3, float(total) - eave)
+        parts, rise = [], 0.0
+        for ring in roof["footprint"]:
+            try:
+                V, F, r = hip_roof(ring, pitch, max_rise, eave, int(pr.get("contours", 12)))
+            except Exception:  # noqa: BLE001  (an optional roof never stops the 3D build)
+                continue
+            if len(F):
+                parts.append((V, F))
+                rise = max(rise, r)
+        if not parts:
+            continue
+        V, F = _merge(parts)
+        rid = f"{lv['id']}_roof"
+        out.add(rid, "roof", "pitched_roof", V, F, COLORS["roof_tiles"])
+        level_of[rid] = lv["id"]
+        # trim the storey's own elements under the slope (a chord under a roof plane stays under it)
+        for m in out.meshes:
+            base = m["id"].removesuffix("_glass")
+            if m["type"] in ("floor", "roof") or (of.get(m["id"]) or of.get(base)) != lv["id"]:
+                continue
+            Vm = m["vertices"]
+            for i in np.nonzero(Vm[:, 2] > 1e-6)[0]:
+                z = roof_height_at(float(Vm[i, 0]), float(Vm[i, 1]), roof["footprint"], pitch, max_rise, eave)
+                if z is not None and Vm[i, 2] > z - 0.02:
+                    Vm[i, 2] = max(0.0, z - 0.02)
+        out.metadata.setdefault("pitched_roofs", []).append(
+            {"level": lv["id"], "name": lv.get("name"), "pitch_deg": pitch, "eave_m": round(float(eave), 3),
+             "ridge_m": round(float(eave + rise), 3), "footprint": roof.get("source")})
 
 
 def _railing(out, w, u, c, s0, s1, t, p2):

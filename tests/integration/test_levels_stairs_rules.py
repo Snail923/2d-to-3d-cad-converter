@@ -182,3 +182,59 @@ def test_outline_connects_the_wall_vertices_when_the_plan_is_not_closed():
     assert src == "wall_vertices" and len(out) == 1 and out[0].area > 55 and not out[0].interiors
     assert all(out[0].buffer(0.2).contains(w) for w in walls)
     assert level_outline([], []) == ([], None)
+
+
+def test_hip_roof_surface():
+    import numpy as np
+    from architectural_converter.reconstruction3d.roof import hip_roof, roof_height_at
+    ring = [(0, 0), (10, 0), (10, 6), (0, 6)]
+    V, F, rise = hip_roof(ring, 45.0)
+    assert abs(rise - 3.0) < 0.01 and abs(V[:, 2].max() - 3.0) < 0.01 and V[:, 2].min() == 0.0
+    tri = V[F]
+    area = 0.5 * np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum()
+    assert abs(area - 60 / np.cos(np.radians(45))) < 0.06 * area        # four planes at 45 degrees
+    plan = 0.5 * np.abs(np.cross(tri[:, 1, :2] - tri[:, 0, :2], tri[:, 2, :2] - tri[:, 0, :2])).sum()
+    assert abs(plan - 60.0) < 0.01                                        # covers the outline, no overlap
+    # the ridge runs along the middle of the long sides; the short sides carry the triangles (hips)
+    top = V[V[:, 2] > 2.99]
+    assert top[:, 0].min() < 3.2 and top[:, 0].max() > 6.8 and np.allclose(top[:, 1], 3.0, atol=0.02)
+    assert abs(roof_height_at(5, 1, [ring], 45.0, None, 0.0) - 1.0) < 1e-6
+    assert abs(roof_height_at(0.5, 3, [ring], 45.0, None, 0.5) - 1.0) < 1e-6 and roof_height_at(11, 3, [ring], 45.0, None, 0) is None
+    # a height limit gives a flat top; an L-shaped outline has a valley, still one surface
+    V2, F2, rise2 = hip_roof(ring, 45.0, max_rise=1.0, eave_z=2.0)
+    assert abs(rise2 - 1.0) < 1e-6 and abs(V2[:, 2].max() - 3.0) < 1e-6 and abs(V2[:, 2].min() - 2.0) < 1e-6
+    ell = [(0, 0), (12, 0), (12, 5), (5, 5), (5, 12), (0, 12)]
+    V3, F3, rise3 = hip_roof(ell, 30.0)
+    t3 = V3[F3]
+    assert abs(0.5 * np.abs(np.cross(t3[:, 1, :2] - t3[:, 0, :2], t3[:, 2, :2] - t3[:, 0, :2])).sum() - 95.0) < 0.05
+    assert abs(rise3 - 2.5 * np.tan(np.radians(30))) < 0.02
+    assert len(hip_roof([(0, 0), (1, 0)], 30.0)[1]) == 0
+
+
+def test_attic_storey_gets_a_pitched_roof_and_its_walls_are_trimmed():
+    import copy
+    import numpy as np
+    doc, _ = build_permit_set()
+    st = _run(doc, "permit_attic.dxf")
+    model = copy.deepcopy(st.model)
+    top = max((lv for lv in model["building"]["levels"] if lv["kind"] == "floor_plan"), key=lambda lv: lv["z"])
+    top["name"] = "Attic"
+    top["roof"] = {"kind": "pitched", "source": "outline", "footprint": top["outline"]}
+    m3 = build_3d(model, PipelineConfig())
+    roof = next(m for m in m3.meshes if m["id"] == f"{top['id']}_roof")
+    assert roof["type"] == "roof" and roof["classification"] == "pitched_roof" and roof["level"] == top["id"]
+    info = m3.metadata["pitched_roofs"][0]
+    z = roof["vertices"][:, 2] - top["z"]
+    assert abs(z.max() - info["ridge_m"]) < 1e-3 and info["ridge_m"] <= top["height"] + 1e-6 and info["ridge_m"] > 1.5
+    assert abs(z.min() - info["eave_m"]) < 1e-3
+    # every wall of the attic ends under the roof; the storeys below keep their height
+    walls = [m for m in m3.meshes if m["type"] == "wall" and m.get("level") == top["id"]]
+    assert walls and max(m["vertices"][:, 2].max() for m in walls) - top["z"] <= info["ridge_m"] + 1e-6
+    outer = min(walls, key=lambda m: m["vertices"][:, 1].min())                # a facade wall: knee-wall high
+    assert outer["vertices"][:, 2].max() - top["z"] < 1.6
+    below = [m for m in m3.meshes if m["type"] == "wall" and m.get("level") not in (None, top["id"])]
+    flat = build_3d(st.model, PipelineConfig())
+    assert max(m["vertices"][:, 2].max() for m in below) == max(
+        m["vertices"][:, 2].max() for m in flat.meshes if m["type"] == "wall" and m.get("level") not in (None, top["id"]))
+    off = build_3d(model, PipelineConfig({"phase2": {"pitched_roof": {"enabled": False}}}))
+    assert not [m for m in off.meshes if m["classification"] == "pitched_roof"]
