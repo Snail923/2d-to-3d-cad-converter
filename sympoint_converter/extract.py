@@ -88,13 +88,24 @@ class Extractor:
         return (w / n if n else 0.0), (float(np.mean(sc)) if sc else 0.0)
 
     # ------------------------------------------------------------------ main
+    def _step(self, name, fn, default):
+        """One extraction step; a geometry error in an optional step skips it (logged), it never
+        stops the whole run. Straight walls are not optional."""
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            self.log.setdefault("step_errors", {})[name] = f"{type(e).__name__}: {e}"
+            self.log.setdefault("step_tracebacks", {})[name] = traceback.format_exc()[-2000:]
+            return default
+
     def run(self) -> dict:
         walls, wall_faces = self.straight_walls()
-        walls += self.arc_walls()
-        walls += self.railings()
-        columns = self.columns(walls)
-        doors, windows = self.openings(walls)
-        stairs = self.stairs()
+        walls += self._step("arc_walls", self.arc_walls, [])
+        walls += self._step("railings", self.railings, [])
+        columns = self._step("columns", lambda: self.columns(walls), [])
+        doors, windows = self._step("openings", lambda: self.openings(walls), ([], []))
+        stairs = self._step("stairs", self.stairs, [])
         self.log.update({"walls": len(walls), "columns": len(columns), "doors": len(doors),
                          "windows": len(windows), "stairs": len(stairs)})
         return {"sympoint_walls": walls, "sympoint_columns": columns, "sympoint_doors": doors,

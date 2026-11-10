@@ -289,8 +289,12 @@ async function runSymPoint(name, buf) {
     } catch (e) {
       // a geometry error in an optional step: retry once without them (like approach 1's safe mode)
       if (!/Topology|GEOS|non-noded|depth mismatch|IllegalArgument/i.test(e.message)) throw e;
-      setLoading("Geometry error (" + e.message.slice(0, 80) + "…) — retrying in safe mode");
-      S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config, safe: true }, [buf]));
+      setLoading("Geometry error (" + e.message.trim().split("\n").pop().slice(0, 80) + "…) — retrying in safe mode");
+      try {
+        S.results.sympoint = JSON.parse(await call("sp_process", { name, bytes: buf, response: resp, config, safe: true }, [buf]));
+      } catch (e2) {
+        throw new Error(e.message + "\n\n--- retry in safe mode also failed ---\n" + e2.message);
+      }
       S.results.sympoint.safeMode = true;
     }
     if (S.show) S.corrByMethod[S.show] = S.corrections;
@@ -305,9 +309,15 @@ async function runSymPoint(name, buf) {
   } catch (e) {
     if (/engine restarted|cancelled/.test(e.message)) { setStatus("Cancelled."); return; }
     const restart = /stops now|CUDA error/.test(e.message) ? " After a CUDA error the service stops itself: start it again." : "";
-    $("#spStatus").innerHTML = `<b class="err">Approach 2 failed:</b> ${spHelp(e.message + "." + restart)}`;
+    const lines = e.message.trim().split("\n");
+    const last = lines[lines.length - 1];
+    console.error("Approach 2 failed:\n" + e.message);
+    const geo = /Topology|GEOS|non-noded|depth/i.test(e.message);
+    $("#spStatus").innerHTML = `<b class="err">Approach 2 failed:</b> ${esc(last)}` +
+      (lines.length > 1 ? `<details><summary>details (Python traceback)</summary><pre class="mono small" style="white-space:pre-wrap;max-height:260px;overflow:auto">${esc(e.message)}</pre></details>` : "") +
+      (geo ? "" : `<br>${spHelp(restart.trim() || "Check that the SymPointV2 service is running.")}`);
     $("#spBadge").textContent = "off";
-    setStatus("Approach 2 (SymPointV2) failed: " + e.message);
+    setStatus("Approach 2 (SymPointV2) failed: " + last + " (details in the SymPointV2 service panel)");
     $("#spPanel").open = true;
   } finally {
     setLoading(null);

@@ -44,6 +44,9 @@ class SymPointPipeline(ExtractionPipeline):
         st.sp_labels, st.sp_prims, st.sp_request, st.sp_response = labels, prims, req, resp
         t0 = time.perf_counter()
         cands, log = extract(st.drawing, st.ctx, prims, labels, self.sp, st.ctx.ids)
+        for step, err in (log.get("step_errors") or {}).items():
+            st.drawing.issues.append({"stage": "detect", "severity": "warning",
+                                      "message": f"approach 2: {step} skipped after an error: {err}"})
         st.timings["detect:sympoint_extract"] = round(time.perf_counter() - t0, 4)
         st.ctx.candidates = cands
         st.detected = copy.deepcopy(cands)
