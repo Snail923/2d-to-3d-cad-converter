@@ -247,6 +247,11 @@ def cmd_web(a):
     class Quiet(SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def end_headers(self):
+            # always the current build: a rebuilt site must never run with a cached old app.js
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            super().end_headers()
     handler = functools.partial(Quiet, directory=site)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), handler)
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
