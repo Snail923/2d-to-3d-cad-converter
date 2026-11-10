@@ -486,6 +486,7 @@ function load(data, keepView = false) {
   renderInfo();
   renderCorr();
   viewer3d.setData(data.mesh, S.model);
+  updateRoofBox(data.mesh);
   const b = S.model.building || {}, fl = b.stacked ? b.levels.filter((l) => l.kind === "floor_plan").sort((x, y) => x.z - y.z) : [];
   $("#levels3dBox").style.display = fl.length ? "" : "none";
   $("#levels3d").innerHTML = fl.map((l, i) => `<option value="${i}" ${i === fl.length - 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
@@ -1039,6 +1040,11 @@ function showTab(id) {
 for (const b of $$(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
 $("#show3dFloors").addEventListener("change", (e) => viewer3d.setVisible("floor", e.target.checked));
 $("#show3dReview").addEventListener("change", (e) => viewer3d.setVisible("review", e.target.checked));
+$("#show3dRoofs").addEventListener("change", (e) => viewer3d.setVisible("roof", e.target.checked));
+function updateRoofBox(mesh) {
+  $("#roof3dBox").style.display = mesh.meshes.some((m) => m.type === "roof") ? "" : "none";
+  viewer3d.setVisible("roof", $("#show3dRoofs").checked);
+}
 $("#levels3d").addEventListener("change", (e) => viewer3d.setVisible("maxLevel", +e.target.value));
 $("#show3dGlass").addEventListener("change", (e) => viewer3d.setVisible("window", e.target.checked));
 $("#stack3d").addEventListener("change", async (e) => {
@@ -1049,6 +1055,7 @@ $("#stack3d").addEventListener("change", async (e) => {
     const mesh = JSON.parse(await call("sp_mesh", { stack: e.target.checked }));
     S.data.mesh = mesh;
     viewer3d.setData(mesh, S.model);
+    updateRoofBox(mesh);
     viewer3d.setVisible("maxLevel", +$("#levels3d").value);
   } catch (err) { alert("3D rebuild failed: " + err.message); }
   finally { setLoading(null); S.busy = false; }

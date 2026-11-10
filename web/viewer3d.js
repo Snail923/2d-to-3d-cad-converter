@@ -22,7 +22,7 @@ export class Viewer3D {
     this.root.rotation.x = -Math.PI / 2;  // model z-up -> three y-up
     this.scene.add(this.root);
     this.objects = new Map();
-    this.visible = { floor: true, review: true, window: true, maxLevel: Infinity };
+    this.visible = { floor: true, roof: true, review: true, window: true, maxLevel: Infinity };
     this.levelRank = new Map();
     this.ray = new THREE.Raycaster();
     this.renderer.domElement.addEventListener("click", (ev) => this.pick(ev));
@@ -55,7 +55,7 @@ export class Viewer3D {
       const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(r, gr, b), transparent: a < 1, opacity: a,
         roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide, flatShading: true, depthWrite: a >= 1 });
       const obj = new THREE.Mesh(g, mat);
-      obj.userData = { id: m.id, type: m.type, review: statusOf.get(m.id) === "NEEDS_REVIEW", level: levelOf.get(m.id), base: mat.color.clone() };
+      obj.userData = { id: m.id, type: m.type, review: statusOf.get(m.id) === "NEEDS_REVIEW", level: levelOf.get(m.id) ?? m.level, base: mat.color.clone() };
       this.root.add(obj);
       this.objects.set(m.id + ":" + m.type, obj);
     }
@@ -75,7 +75,7 @@ export class Viewer3D {
   applyVisibility() {
     for (const o of this.objects.values()) {
       const u = o.userData;
-      o.visible = !(u.type === "floor" && !this.visible.floor) && !(u.review && !this.visible.review) &&
+      o.visible = !(u.type === "floor" && !this.visible.floor) && !(u.type === "roof" && !this.visible.roof) && !(u.review && !this.visible.review) &&
         !(u.type === "window" && !this.visible.window) &&
         !((this.levelRank.get(u.level) ?? -1) > this.visible.maxLevel);
     }

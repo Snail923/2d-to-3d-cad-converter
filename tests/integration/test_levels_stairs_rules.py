@@ -124,3 +124,61 @@ def test_floors_can_stay_side_by_side_in_3d():
     assert zmax(stacked) > 9.0 and zmax(flat) < 3.5                    # 4 floors vs one storey high
     xs = lambda m3: np.ptp(np.vstack([m["vertices"] for m in m3.meshes])[:, 0])  # noqa: E731
     assert xs(flat) > xs(stacked) * 2                                   # the plans stay side by side
+
+
+def test_every_stacked_storey_has_a_base_and_a_roof():
+    """Stacking: each floor-plan level gets a base slab and a roof slab over its closed outline;
+    side by side there are none; a storey named attic keeps its top open."""
+    import numpy as np
+    doc, _ = build_permit_set()
+    st = _run(doc, "permit_slabs.dxf")
+    plans = sorted((lv for lv in st.building.levels if lv.kind == "floor_plan"), key=lambda lv: lv.z)
+    assert all(lv.outline and lv.outline_source == "plan" for lv in plans)
+    assert all(not p.interiors for lv in plans for p in lv.outline)
+    assert all(lv["outline"] for lv in st.model["building"]["levels"] if lv["kind"] == "floor_plan")
+    m3 = build_3d(st.model, PipelineConfig())
+    by = {m["id"]: m for m in m3.meshes}
+    slab = 0.15
+    for k, lv in enumerate(plans):
+        base, roof = by[f"{lv.id}_base"], by[f"{lv.id}_roof"]
+        assert base["type"] == "floor" and roof["type"] == "roof" and base["level"] == roof["level"] == lv.id
+        zb, zr = base["vertices"][:, 2], roof["vertices"][:, 2]
+        assert lv.z - slab < zb.min() and zb.max() < lv.z                      # inside the room floors
+        if k < len(plans) - 1:                                                 # = the floor zone of the storey above
+            assert plans[k + 1].z - slab < zr.min() and zr.max() < plans[k + 1].z
+        else:                                                                  # on top of the highest walls
+            assert abs(zr.min() - (lv.z + lv.height)) < 1e-6 and abs(zr.max() - (lv.z + lv.height + slab)) < 1e-6
+        # the slab covers the whole storey: every wall of the level stands on it
+        xy = np.vstack([m["vertices"][:, :2] for m in m3.meshes if m.get("level") == lv.id and m["type"] == "wall"])
+        assert base["vertices"][:, 0].min() <= xy[:, 0].min() + 0.06 and base["vertices"][:, 0].max() >= xy[:, 0].max() - 0.06
+        assert base["vertices"][:, 1].min() <= xy[:, 1].min() + 0.06 and base["vertices"][:, 1].max() >= xy[:, 1].max() - 0.06
+    assert m3.metadata["counts"]["roof"] == len(plans)
+    assert [s["base"] and s["roof"] is True for s in m3.metadata["level_slabs"]] == [True] * len(plans)
+    assert "level" in m3.to_json()["meshes"][0]
+    flat = build_3d(st.model, PipelineConfig({"phase2": {"stack_levels": False}}))
+    assert not [m for m in flat.meshes if m["type"] == "roof" or m["id"].endswith("_base")]
+    # an attic keeps its top open (its roof is not a flat slab)
+    model = __import__("copy").deepcopy(st.model)
+    top = max((lv for lv in model["building"]["levels"] if lv["kind"] == "floor_plan"), key=lambda lv: lv["z"])
+    top["name"] = "Attic Floor Plan"
+    m4 = build_3d(model, PipelineConfig())
+    ids = {m["id"] for m in m4.meshes}
+    assert f"{top['id']}_base" in ids and f"{top['id']}_roof" not in ids
+    assert m4.metadata["counts"]["roof"] == len(plans) - 1
+
+
+def test_outline_connects_the_wall_vertices_when_the_plan_is_not_closed():
+    from shapely.geometry import box
+    from architectural_converter.topology.level_slabs import level_outline
+    # a closed plan: its own shape, voids filled
+    ring = box(0, 0, 10, 8).difference(box(0.2, 0.2, 9.8, 7.8))
+    out, src = level_outline([ring], [(0, 0), (10, 0), (10, 8), (0, 8)])
+    assert src == "plan" and len(out) == 1 and abs(out[0].area - 80) < 0.5 and not out[0].interiors
+    # three separate walls around a 10 x 8 m space, the gaps between them too wide to close:
+    # no shape of its own, so the outer wall vertices are connected
+    walls = [box(0, 0, 4, 0.2), box(9.8, 2, 10, 8), box(0, 7.8, 3, 8)]
+    pts = [(0, 0.1), (4, 0.1), (9.9, 2), (9.9, 8), (0, 7.9), (3, 7.9)]
+    out, src = level_outline(walls, pts)
+    assert src == "wall_vertices" and len(out) == 1 and out[0].area > 55 and not out[0].interiors
+    assert all(out[0].buffer(0.2).contains(w) for w in walls)
+    assert level_outline([], []) == ([], None)

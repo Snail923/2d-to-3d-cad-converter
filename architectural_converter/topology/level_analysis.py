@@ -187,9 +187,12 @@ class Level:
     confidence: float = 0.5
     alignment: dict[str, Any] = field(default_factory=dict)
     wall_ids: list[str] = field(default_factory=list)
+    outline: list = field(default_factory=list)         # closed outline(s) of the storey (level_slabs.py)
+    outline_source: str | None = None                   # plan | wall_vertices
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "name": self.name, "rank": self.rank,
+        return {"outline": [[[round(float(x), 4), round(float(y), 4)] for x, y in p.exterior.coords] for p in self.outline],
+                "outline_source": self.outline_source, "id": self.id, "name": self.name, "rank": self.rank,
                 "elevation": round(self.elevation, 3) if self.elevation is not None else None,
                 "kind": self.kind, "bbox": [round(v, 3) for v in self.bbox],
                 "translation": [round(self.translation[0], 4), round(self.translation[1], 4)],

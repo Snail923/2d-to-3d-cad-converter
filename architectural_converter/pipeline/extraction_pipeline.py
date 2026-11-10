@@ -498,6 +498,37 @@ class ExtractionPipeline:
                     "a wall may be missing, or the space was not recognised as a room.",
                     "Add the missing wall or draw the room; the 3D model fills it with a ground slab.", 0.6, set())
         st.logs["ground"] = {"unassigned_floor_pieces": len(pieces), "area_m2": round(sum(p.area for p, _ in pieces), 2)}
+        self._level_outlines(st, pieces)
+
+    def _level_outlines(self, st, pieces):
+        """Closed outline of every floor-plan level (stacked drawings): its base and roof slab."""
+        b = st.building
+        lc = self.cfg["phase2"].get("level_slabs", {})
+        if b is None or not b.levels or not lc.get("enabled", True):
+            return
+        from ..topology.level_slabs import level_outline
+        gc = self.cfg["phase2"].get("ground", {})
+        live = lambda e: e.status != Status.REJECTED  # noqa: E731
+        log = {}
+        for lv in b.levels:
+            if lv.kind != "floor_plan":
+                continue
+            walls = [w for w in b.walls.values() if live(w) and not w.is_hypothesis and w.level == lv.id]
+            geoms = [w.polygon(0.05) for w in walls]
+            geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis and r.level == lv.id]
+            geoms += [c.polygon for c in b.columns.values() if live(c) and c.level == lv.id]
+            geoms += [p for p, lid in pieces if lid == lv.id]
+            pts = [xy for w in walls for xy in w.axis.coords]
+            try:
+                lv.outline, lv.outline_source = level_outline(
+                    geoms, pts, gc.get("close_m", 2.0), gc.get("wide_close_m", ()), gc.get("min_enclosure", 0.6),
+                    lc.get("min_hull_share", 0.5), lc.get("hull_ratio", 0.25), gc.get("min_area_m2", 1.0))
+            except Exception as e:  # noqa: BLE001  (an optional step must never stop the pipeline)
+                lv.outline, lv.outline_source = [], None
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"outline of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})
+            log[lv.id] = {"source": lv.outline_source, "area_m2": round(sum(p.area for p in lv.outline), 2)}
+        st.logs["level_outlines"] = log
 
     def _stage_export(self, st):
         from .database_exporter import build_model

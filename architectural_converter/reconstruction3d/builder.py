@@ -38,7 +38,7 @@ class Model3D:
     def to_json(self) -> dict:
         return {"metadata": self.metadata,
                 "meshes": [{"id": m["id"], "type": m["type"], "classification": m["classification"],
-                            "color": m["color"], "positions": np.round(m["vertices"], 4).ravel().tolist(),
+                            "color": m["color"], "level": m.get("level"), "positions": np.round(m["vertices"], 4).ravel().tolist(),
                             "indices": m["faces"].ravel().tolist()} for m in self.meshes]}
 
     def to_trimesh_scene(self):
@@ -159,6 +159,8 @@ def build_3d(model: dict, cfg) -> Model3D:
             out.add(r["id"], "floor", r.get("classification"), V, F,
                     COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
     ground_levels = _ground(out, model, view, p2, levels, stacked)
+    if stacked and p2.get("stack_levels", True):
+        ground_levels.update(_level_slabs(out, p2, levels))
     # stack_levels false: every floor stays where it is drawn, side by side on the ground
     out.metadata["stacked_in_3d"] = bool(stacked and p2.get("stack_levels", True))
     if stacked and p2.get("stack_levels", True):
@@ -171,9 +173,10 @@ def build_3d(model: dict, cfg) -> Model3D:
                 continue
             tx, ty = lv.get("translation") or (0.0, 0.0)
             m["vertices"] = m["vertices"] + np.array([tx, ty, lv.get("z") or 0.0])
+            m["level"] = lv["id"]
     allv = np.vstack([m["vertices"] for m in out.meshes]) if out.meshes else np.zeros((1, 3))
     out.metadata["bounds"] = [allv.min(axis=0).round(3).tolist(), allv.max(axis=0).round(3).tolist()]
-    out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor", "stair")}
+    out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor", "stair", "roof")}
     return out
 
 
@@ -205,6 +208,51 @@ def _ground(out, model, view, p2, levels, stacked) -> dict:
         area += gp.get("area") or 0.0
     if level_of:
         out.metadata["ground_slabs"] = {"count": len(level_of), "area_m2": round(area, 2)}
+    return level_of
+
+
+def _level_slabs(out, p2, levels) -> dict:
+    """Stacked storeys: a base slab under and a roof slab over each floor-plan level, from the
+    level's closed outline (building.levels[].outline, computed by Phase 1).
+
+    The base slab lies a few millimetres inside the room floors, and the roof slab inside the
+    floor of the storey above (or on top of the walls of the highest storey), so the slabs show
+    exactly where nothing else covers. Levels named as attic / roof keep their top open."""
+    lc = p2.get("level_slabs", {})
+    if not lc.get("enabled", True):
+        return {}
+    slab, eps = p2["slab_thickness_m"], 0.005
+    plans = sorted((lv for lv in levels.values() if lv.get("kind") == "floor_plan"), key=lambda lv: lv.get("z") or 0.0)
+    no_roof = [n.lower() for n in lc.get("no_roof_names", [])]
+    level_of, info = {}, []
+    for k, lv in enumerate(plans):
+        rings = lv.get("outline") or []
+        H = lv.get("height") or p2["wall_height_m"]
+        name = (lv.get("name") or "").lower()
+        open_top = any(n in name for n in no_roof)
+        top = k == len(plans) - 1
+        made = {"level": lv["id"], "name": lv.get("name"), "outline": lv.get("outline_source"), "base": False,
+                "roof": False if not open_top else "open (attic / roof storey)"}
+        try:
+            base = _merge([extrude(r, -slab + eps, -eps) for r in rings]) if rings else None
+            if top:
+                z0, z1 = H, H + slab
+            else:                                  # = the floor zone of the storey above (levels can be
+                up = (plans[k + 1].get("z") or 0.0) - (lv.get("z") or 0.0)     # further apart than the wall height)
+                z0, z1 = up - slab + eps, up - eps
+            roof = _merge([extrude(r, z0, z1) for r in rings]) if rings and not open_top else None
+        except Exception:  # noqa: BLE001  (an optional slab never stops the 3D build)
+            base = roof = None
+        if base is not None and len(base[0]):
+            out.add(f"{lv['id']}_base", "floor", "level_slab", base[0], base[1], COLORS["ground"])
+            level_of[f"{lv['id']}_base"] = lv["id"]
+            made["base"] = True
+        if roof is not None and len(roof[0]):
+            out.add(f"{lv['id']}_roof", "roof", "level_roof", roof[0], roof[1], COLORS["ground"])
+            level_of[f"{lv['id']}_roof"] = lv["id"]
+            made["roof"] = True
+        info.append(made)
+    out.metadata["level_slabs"] = info
     return level_of
 
 
