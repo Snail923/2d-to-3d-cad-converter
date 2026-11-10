@@ -595,14 +595,27 @@ class Extractor:
         return res
 
     def _host_frame(self, pts, walls, tree, search):
-        """Nearest straight wall to a symbol: (wall, distance) or (None, inf)."""
+        """The wall a symbol sits in: (wall, distance) or (None, inf). The nearest straight wall;
+        an elongated symbol (window glazing, a sliding door) lies along its wall, so a wall running
+        across it (the crossing wall its end touches) is taken only when no wall runs along it."""
         hull = MultiPoint([tuple(p) for p in pts]).convex_hull
-        best = (None, math.inf)
+        along = None
+        try:
+            wd, L, su, _ = mrr_dims(hull)
+            if L > 2 * max(wd, 1e-6):
+                along = su
+        except Exception:  # noqa: BLE001
+            pass
+        best, best_key = (None, math.inf), None
         for k in tree.query(safe_buffer(hull, search)):
             w = walls[int(k)]
             d = w.polygon(self.c["nominal_thickness_m"]).distance(hull)
-            if d < best[1]:
-                best = (w, d)
+            if d > search:
+                continue
+            across = along is not None and abs(dot(w.u, along)) < 0.7
+            key = (across, d)
+            if best_key is None or key < best_key:
+                best, best_key = (w, d), key
         return best
 
     def _swing_arcs(self, ks):

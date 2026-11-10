@@ -7,6 +7,10 @@ filled. When the plan does not close into a shape (walls with wide gaps, rooms n
 closed shape covers less than ``min_hull_share`` of the hull of its walls), the outline is made by
 connecting the outer vertices of the plan's walls (concave hull, else convex hull).
 
+The storeys of a building repeat: the part of an outline that reaches further than
+``max_overhang_m`` beyond every other storey is not building (site lines drawn on that sheet)
+and is cut off (``limit_overhang``).
+
 Phase 2 only extrudes these outlines (base slab, roof slab); no geometry is decided there."""
 from __future__ import annotations
 
@@ -69,3 +73,27 @@ def level_outline(geoms, wall_points, close_m: float = 2.0, wide_close_m=(), min
         if p.area >= min_area_m2:
             out.append(p)
     return out, (source if out else None)
+
+
+def limit_overhang(outlines, max_overhang_m: float, min_area_m2: float = 1.0):
+    """``outlines``: [(polygons, (tx, ty))] of the storeys, lowest first, each in its own sheet
+    coordinates with the translation that stacks it. Returns the same list with every storey
+    clipped to the other storeys grown by ``max_overhang_m``, and the area cut from each.
+
+    The storeys of a building repeat: what only one sheet shows, far outside all the others, is not
+    building. The lowest storey is kept as it is (a basement or podium may be wider than the rest),
+    and so is everything when there are fewer than three storeys to compare."""
+    from shapely.affinity import translate
+    from ..geometry.geometric_utils import robust_intersection
+    moved = [[translate(p, tx, ty) for p in polys] for polys, (tx, ty) in outlines]
+    out, cut = [], []
+    for k, (polys, (tx, ty)) in enumerate(outlines):
+        kept = moved[k]
+        others = [p for j, ps in enumerate(moved) if j != k for p in ps]
+        if k > 0 and len(outlines) >= 3 and kept and others and max_overhang_m is not None:
+            allow = safe_buffer(robust_union(others), max_overhang_m, join_style=2)
+            kept = [Polygon(q.exterior) for p in kept for q in polygons_of(robust_intersection(p, allow))
+                    if q.area >= min_area_m2]
+        cut.append(round(sum(p.area for p in moved[k]) - sum(p.area for p in kept), 2))
+        out.append([translate(p, -tx, -ty) for p in kept])
+    return out, cut

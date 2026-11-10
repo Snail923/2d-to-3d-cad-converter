@@ -25,7 +25,7 @@
   "stack_levels": true,
   "_doc_stack_levels": "Multi-storey permit sets: true = floors moved onto each other at their levels; false = every floor plan stays where it is drawn, side by side at ground level.",
   "level_slabs": {
-    "_doc": "Stacked storeys (topology/level_slabs.py, reconstruction3d/builder.py): every floor-plan level gets a base slab and a roof slab over its closed outline. A plan that does not close (its closed shape covers less than min_hull_share of the hull of its walls) gets the outline that connects the outer vertices of its walls (concave hull with hull_ratio; 1 = convex). Levels whose name matches no_roof_names keep their top open (attic / roof storeys: their roof shape is not a flat slab).",
+    "_doc": "Stacked storeys (topology/level_slabs.py, reconstruction3d/builder.py): every floor-plan level gets a base slab and a roof slab over its closed outline. A plan that does not close (its closed shape covers less than min_hull_share of the hull of its walls) gets the outline that connects the outer vertices of its walls (concave hull with hull_ratio; 1 = convex). Levels whose name matches no_roof_names keep their top open (attic / roof storeys: their roof shape is not a flat slab). The storeys of a building repeat: the part of a storey's outline further than max_overhang_m beyond every other storey is cut (the lowest storey is kept; null = no limit).",
     "enabled": true,
     "min_hull_share": 0.5,
     "hull_ratio": 0.25,
@@ -39,6 +39,7 @@
       "combles",
       "atico",
       "sottotetto"
-    ]
+    ],
+    "max_overhang_m": 3.0
   }
 }

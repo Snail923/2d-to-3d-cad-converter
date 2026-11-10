@@ -7,10 +7,11 @@ the walls of a building form groups that enclose rooms and carry doors and windo
 After rooms are known, every group of connected walls is checked. A group none of whose walls
 bounds a room, hosts a door or window, or is a balcony railing closes nothing:
 
-* small groups (a few walls, short total length) are rejected, and so are medium groups far from
-  every room (detail drawings, site lines);
-* larger groups are kept for review (free-standing walls exist, and a floor whose rooms could
-  not be closed must not disappear), with the reason in their notes.
+* next to rooms (the building was recognised there) the group is not part of it: rejected,
+  whatever its size (plot limits, road and kerb lines, furniture);
+* away from every room, small and medium groups are rejected (detail drawings, site lines);
+* large groups away from every room are kept for review: a floor whose rooms could not be
+  closed must not disappear.
 
 Rooms are not affected (the removed walls bound none), so nothing has to be recomputed."""
 from __future__ import annotations
@@ -65,9 +66,10 @@ def prune_wall_groups(building, tol, cfg) -> dict:
                 break
         small = len(ws) <= max_walls and length <= max_len
         for w in ws:
-            if small or (not near and len(ws) <= far_walls and length <= far_len):
+            if small or near or (len(ws) <= far_walls and length <= far_len):
                 w.veto("not part of a building: its wall group encloses no room and has no door or window"
-                       + ("" if near else f", and is more than {far:g} m from every room"))
+                       + (" (the rooms next to it are closed without it)" if near
+                          else f", and is more than {far:g} m from every room"))
                 log["rejected_walls"] += 1
                 log["rejected_length_m"] += w.length
             elif w.status == Status.ACCEPTED:

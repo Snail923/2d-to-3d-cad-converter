@@ -10,6 +10,12 @@ A door is always set in a wall, and a space with a door is a room. Two rules use
 2. **Room with a door** (after missing-room recovery). A missing-boundary hypothesis that closes a
    room which has a door on its boundary is not a guess any more: the hypothesis becomes a wall.
 
+3. **Window between two walls** (with rule 1). A window is in a wall too. A window symbol that
+   no wall hosts, standing on the line of a wall between that wall's end and the next crossing
+   wall (or between two crossing walls), is in that wall: the wall is extended across it, or a
+   wall piece is added for it, and the window is hosted there. Without it the glazed side of a
+   room (a balcony front) stays open and the two spaces merge.
+
 Walls added here are NEEDS_REVIEW (they close rooms, appear in 3D in the review colour and can be
 rejected in the review UI); each records the door and the reason in its notes and evidence."""
 from __future__ import annotations
@@ -78,7 +84,57 @@ def _first_stop(u, c, s_from, direction, walls, tol, reach):
     return best
 
 
-def complete_door_walls(walls, doors, tol, cfg, ids) -> dict:
+def _host_window(o, walls, live, by_id, tol, ids, max_gap, conf):
+    """Rule 3. Returns the wall that now hosts the window (extended or new), or None."""
+    line = _door_line(o, by_id)
+    if line is None:
+        return None
+    u, c, s0, s1, t = line
+    eps = max(tol.snap * 2, 0.02)
+    # both sides must end on a wall: a wall of the same band, or a crossing wall body
+    cov = _covered(u, c, t, live, tol)
+    for side, start in ((-1, s0), (1, s1)):
+        in_band = any(x - max_gap <= start <= y + max_gap for x, y in cov)
+        stop = _first_stop(u, c, start - side * eps, side, live, tol, max_gap + eps)
+        if not in_band and stop is None:
+            return None
+    band = max((t or 0.0) / 2, tol.snap * 2, 0.02)
+    host = None
+    for w in live:
+        if w.kind not in ("straight", "centerline") or abs(abs(dot(w.u, u)) - 1) > 1e-3:
+            continue
+        sg = 1.0 if dot(w.u, u) >= 0 else -1.0
+        a, b = sorted((sg * w.s0, sg * w.s1))
+        if abs(sg * w.c - c) <= band and a - max_gap <= s1 and b + max_gap >= s0:
+            if host is None or (w.thickness or 0) > (host[0].thickness or 0):
+                host = (w, sg)
+    if host is not None:
+        w, sg = host
+        lo, hi = sorted((sg * s0, sg * s1))
+        w.s0, w.s1 = min(w.s0, lo), max(w.s1, hi)
+        w.detected_interval = (w.s0, w.s1)
+        w.notes.append(f"extended across window {o.id} (a window is in a wall)")
+    else:
+        thick = t or next((x.thickness for x in live if x.thickness), None)
+        w = Wall(id=ids.new("wall"), kind="straight" if thick else "centerline", u=u, c=c, s0=s0, s1=s1,
+                 thickness=thick, thickness_source="door_band" if thick else "unknown", detected_interval=(s0, s1))
+        w.detection_methods.add("door_implied")
+        w.add_evidence("door_requires_wall", 1.0)
+        w.confidence = conf
+        w.status = Status.NEEDS_REVIEW
+        w.status_reason = f"window {o.id} needs a wall: it stands between two walls with no wall of its own"
+        w.notes.append(f"added: wall of window {o.id} (glazing between two walls)")
+        lo, hi = s0, s1
+    o.host_wall = w.id
+    o.host_interval = (lo, hi)
+    if o.id not in w.openings:
+        w.openings.append(o.id)
+    o.set_evidence("host_wall", 1.0)
+    o.notes.append("hosted by the door / window rule: glazing between two walls is in a wall")
+    return w
+
+
+def complete_door_walls(walls, doors, tol, cfg, ids, windows=None) -> dict:
     """Rule 1: add the missing wall pieces on the line of each door. Returns a log."""
     rc = cfg["reconstruction"].get("door_rules", {})
     log = {"doors_checked": 0, "walls_added": 0, "doors_hosted": 0, "added": []}
@@ -89,8 +145,26 @@ def complete_door_walls(walls, doors, tol, cfg, ids) -> dict:
     conf = float(rc.get("added_wall_confidence", 0.6))
     live = [w for w in walls if _live(w)]
     by_id = {w.id: w for w in walls}
-    for o in doors:
-        if not _live(o) or o.type != "door":
+    win_gap = float(rc.get("window_side_gap_m", 0.3)) if rc.get("host_windows", True) else None
+    log["windows_hosted"] = 0
+    for o in list(doors) + list(windows or ()):
+        if not _live(o) or o.type not in ("door", "window"):
+            continue
+        if o.type == "window":
+            if win_gap is None or (o.host_wall is not None and _live(by_id.get(o.host_wall))):
+                continue
+            try:
+                done = _host_window(o, walls, live, by_id, tol, ids, win_gap, conf)
+            except Exception:  # noqa: BLE001  (one odd symbol never stops the rule)
+                done = None
+            if done is not None:
+                log["windows_hosted"] += 1
+                if done.id not in by_id:
+                    walls.append(done)
+                    live.append(done)
+                    by_id[done.id] = done
+                    log["walls_added"] += 1
+                    log["added"].append(done.id)
             continue
         line = _door_line(o, by_id)
         if line is None:

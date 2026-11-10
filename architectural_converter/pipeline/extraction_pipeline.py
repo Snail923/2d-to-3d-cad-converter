@@ -279,7 +279,11 @@ class ExtractionPipeline:
         # a door is always in a wall: complete the wall on the line of every door
         from ..topology.door_rules import complete_door_walls, promote_door_rooms
         try:
-            dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids)
+            dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids, st.windows)
+            for o in st.windows:                       # hosted by the rule: score again with its host
+                if o.host_wall and any("hosted by the door / window rule" in n for n in o.notes):
+                    o.score(cfg["detection"]["weights"]["window"], th)
+            openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
         except Exception as e:  # noqa: BLE001  (an optional rule must never stop the pipeline)
             dlog = {"error": f"{type(e).__name__}: {e}"}
             st.drawing.issues.append({"stage": "topology", "severity": "warning",
@@ -510,11 +514,18 @@ class ExtractionPipeline:
         gc = self.cfg["phase2"].get("ground", {})
         live = lambda e: e.status != Status.REJECTED  # noqa: E731
         log = {}
+        bound = {wid for r in b.rooms.values() if live(r) and not r.is_hypothesis for wid in r.bounding_walls}
+        hosts = {o.host_wall for o in b.openings.values() if live(o) and o.host_wall}
         for lv in b.levels:
             if lv.kind != "floor_plan":
                 continue
             walls = [w for w in b.walls.values() if live(w) and not w.is_hypothesis and w.level == lv.id]
-            geoms = [w.polygon(0.05) for w in walls]
+            # the structure of the storey: walls that bound a room or carry an opening (a free-standing
+            # group kept for review does not make the storey bigger)
+            used = [w for w in walls if w.id in bound or w.id in hosts]
+            # (the vertices of all its walls stay the reference: when the structure covers less than
+            # half of what they span, the storey did not close and its wall vertices are connected)
+            geoms = [w.polygon(0.05) for w in (used or walls)]
             geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis and r.level == lv.id]
             geoms += [c.polygon for c in b.columns.values() if live(c) and c.level == lv.id]
             geoms += [p for p, lid in pieces if lid == lv.id]
@@ -528,6 +539,22 @@ class ExtractionPipeline:
                 st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                           "message": f"outline of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})
             log[lv.id] = {"source": lv.outline_source, "area_m2": round(sum(p.area for p in lv.outline), 2)}
+        # the storeys repeat: cut what one sheet shows far outside all the others
+        plans = sorted((lv for lv in b.levels if lv.kind == "floor_plan" and lv.outline), key=lambda lv: lv.z)
+        over = lc.get("max_overhang_m", 3.0)
+        if over is not None and len(plans) > 1:
+            try:
+                from ..topology.level_slabs import limit_overhang
+                kept, cut = limit_overhang([(lv.outline, tuple(lv.translation)) for lv in plans], float(over),
+                                           gc.get("min_area_m2", 1.0))
+                for lv, polys, c in zip(plans, kept, cut):
+                    if c > 0.5 and polys:
+                        lv.outline = polys
+                        log[lv.id]["cut_beyond_other_storeys_m2"] = c
+                        log[lv.id]["area_m2"] = round(sum(p.area for p in polys), 2)
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"overhang limit of the level outlines skipped: {type(e).__name__}: {e}"})
         st.logs["level_outlines"] = log
 
     def _stage_export(self, st):

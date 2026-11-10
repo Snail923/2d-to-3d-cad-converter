@@ -13,12 +13,14 @@
   "hypothesis_confidence": 0.3,
   "unidentified_opening_confidence": 0.5,
   "door_rules": {
-    "_doc": "A door is always in a wall (topology/door_rules.py): walls are completed along each door's line up to the next crossing wall, and missing-room hypotheses that close a room with a door become walls. Added walls are NEEDS_REVIEW.",
+    "_doc": "A door is always in a wall (topology/door_rules.py): walls are completed along each door's line up to the next crossing wall, and missing-room hypotheses that close a room with a door become walls. Added walls are NEEDS_REVIEW. A window no wall hosts that stands between two walls (within window_side_gap_m on each side) is hosted in the wall of its line, extended across it.",
     "enabled": true,
     "max_gap_m": 4.0,
     "min_piece_m": 0.05,
     "added_wall_confidence": 0.6,
-    "promote_hypotheses": true
+    "promote_hypotheses": true,
+    "host_windows": true,
+    "window_side_gap_m": 0.3
   },
   "label_rules": {
     "_doc": "Room names need rooms (topology/label_rules.py): a room holding several names of different kinds misses a wall between them, and a room name outside every room needs a room; the missing-room hypothesis that separates / encloses the names becomes a wall (NEEDS_REVIEW). Names of open_plan_types may share one room. Off in approach 1 (hypotheses stay proposals there); approach 2 switches it on.",

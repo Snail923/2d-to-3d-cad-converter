@@ -259,3 +259,90 @@ def test_floor_of_an_area_mostly_surrounded_by_walls():
     # the inner corner of an L is bounded on two sides only: outside
     ell = box(0, 0, 10, 1).union(box(0, 0, 1, 10))
     assert unassigned_floor([ell], [ell], close_m=2.0, wide_close_m=(4.0, 6.0), min_enclosure=0.6) == []
+
+
+def _glazed_front():
+    """A balcony whose front towards the bedroom is a window standing between the flank of a
+    crossing wall and the end of a short wall (no wall gap of its own to sit in)."""
+    doc, msp = new_doc()
+    for ly in ("A-WALL", "A-GLAZ"):
+        doc.layers.add(ly)
+    t = 0.2
+    box_room(msp, 10, 6, t)
+    rect_lines(msp, 4.0, 2.0, 4.3, 6 - t)            # crossing wall
+    rect_lines(msp, t, 2.0, 4.0, 2.15)               # wall of the room on the left
+    rect_lines(msp, 6.0, 3.0, 10 - t, 3.15)          # short wall right of the window
+    for y in (3.0, 3.05, 3.1, 3.15):
+        msp.add_line((4.3, y), (6.0, y), dxfattribs={"layer": "A-GLAZ"})
+    for i in range(8):                               # (enough glazing on the layer to vote)
+        msp.add_line((30 + i, 0), (30 + i, 1.2), dxfattribs={"layer": "A-GLAZ"})
+    for (x, y), name in (((5, 1), "BEDROOM"), ((7, 4.5), "BALCONY"), ((2, 4), "STORE")):
+        msp.add_text(name, dxfattribs={"insert": (x, y), "height": 0.2})
+    return save(doc)
+
+
+def test_glazed_balcony_front_is_in_its_wall_and_closes_the_balcony():
+    """The glazing touches the crossing wall with its end and the short wall along it: it belongs
+    to the wall along it, which is extended across it, so the balcony is its own room."""
+    st = build(_glazed_front())
+    ops = [o for o in live(st.building.openings.values()) if o.type in ("window", "door")]
+    assert len(ops) == 1 and abs(ops[0].width - 1.7) < 0.1
+    host = st.building.walls[ops[0].host_wall]
+    assert abs(host.u[0]) > 0.99 and host.length >= 3.8 + 1.6                   # the wall along the glazing
+    assert sorted(r.classification for r in live(st.building.rooms.values())) == ["balcony", "bedroom", "storage"]
+
+
+def test_unhosted_window_between_two_crossing_walls_gets_a_wall():
+    """Door / window rule 3: glazing spanning from one crossing wall to the other, with no wall of
+    its own line at all."""
+    from architectural_converter.models.opening import Opening
+    from architectural_converter.models.wall import Wall
+    from architectural_converter.pipeline.pipeline_config import PipelineConfig
+    from types import SimpleNamespace
+    from architectural_converter.topology.door_rules import complete_door_walls
+    from architectural_converter.models.base_entity import IdFactory
+    left = Wall(id="w1", kind="straight", u=(0.0, 1.0), c=-0.1, s0=0.0, s1=4.0, thickness=0.2)
+    right = Wall(id="w2", kind="straight", u=(0.0, 1.0), c=-2.1, s0=0.0, s1=4.0, thickness=0.2)
+    win = Opening(id="win1", type="window", p0=(0.2, 2.0), p1=(2.0, 2.0), width=1.8, depth=0.15, status=Status.NEEDS_REVIEW)
+    far = Opening(id="win2", type="window", p0=(5.0, 2.0), p1=(6.5, 2.0), width=1.5, depth=0.15, status=Status.NEEDS_REVIEW)
+    walls = [left, right]
+    log = complete_door_walls(walls, [], SimpleNamespace(snap=0.01), PipelineConfig(), IdFactory(), [win, far])
+    assert log["windows_hosted"] == 1 and len(walls) == 3
+    new = walls[-1]
+    assert win.host_wall == new.id and win.id in new.openings and new.status == Status.NEEDS_REVIEW
+    assert "door_implied" in new.detection_methods and abs(new.length - 1.8) < 1e-6
+    assert far.host_wall is None                                          # nothing beside it: not a wall
+
+
+def test_wall_group_next_to_the_building_that_bounds_nothing_is_rejected():
+    """Plot-limit lines drawn as double lines around the house: a closed loop of 'walls' that
+    bounds no room of its own."""
+    doc, msp = new_doc()
+    doc.layers.add("A-WALL")
+    box_room(msp, 6, 4, 0.2)
+    msp.add_text("OFFICE", dxfattribs={"insert": (2, 2), "height": 0.2})
+    for (a, b) in (((-2.5, -2.5), (8.5, -2.5)), ((-2.5, -2.3), (8.5, -2.3)), ((8.5, -2.5), (8.5, 3)), ((8.3, -2.3), (8.3, 3))):
+        msp.add_line(a, b, dxfattribs={"layer": "A-WALL"})
+    st = build(save(doc))
+    outer = [w for w in st.building.walls.values() if not w.rooms]
+    assert len(outer) == 2 and all(w.status == Status.REJECTED and "not part of a building" in w.status_reason for w in outer)
+    assert len(live(st.building.rooms.values())) == 1 and len(live(st.building.walls.values())) == 4
+
+
+def test_storey_outline_is_limited_to_the_other_storeys():
+    from architectural_converter.topology.level_slabs import limit_overhang
+    plan, big = box(0, 0, 10, 8), box(-8, -8, 20, 16)               # one sheet also holds the plot
+    three = [([plan], (0, 0)), ([plan], (0, 0)), ([big], (0, 0))]
+    (a, b, c), cut = limit_overhang(three, 3.0)
+    assert a[0].equals(plan) and b[0].equals(plan) and cut[:2] == [0, 0]
+    assert abs(c[0].area - 16 * 14) < 1.0 and cut[2] > 400            # 3 m beyond the other storeys at most
+    # a wide lowest storey (basement, podium) is kept
+    (a, b, c), cut = limit_overhang([([big], (0, 0)), ([plan], (0, 0)), ([plan], (0, 0))], 3.0)
+    assert a[0].equals(big) and cut == [0, 0, 0]
+    # sheets drawn side by side: compared after the translation that stacks them, returned in place
+    shifted = box(100, -2, 110, 8)                                    # a 2 m balcony more
+    (a, b, c), cut = limit_overhang([([plan], (0, 0)), ([plan], (0, 0)), ([shifted], (-100, 0))], 3.0)
+    assert c[0].equals(shifted) and cut[2] == 0
+    # two storeys: nothing to compare with; no limit configured: nothing cut
+    assert limit_overhang([([plan], (0, 0)), ([big], (0, 0))], 3.0)[1] == [0, 0]
+    assert limit_overhang(three, None)[1] == [0, 0, 0]
