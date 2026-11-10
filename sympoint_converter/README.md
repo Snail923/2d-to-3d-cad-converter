@@ -136,6 +136,32 @@ single-line walls, MLINEs and wide polylines. (The 13th draws everything on laye
 layer names cannot label.) So the result on a real drawing mostly depends on the quality of SymPointV2's labels,
 which is exactly what `compare` measures.
 
+## 4. Reasoning on the model's answer (`reasoning/`)
+
+SymPointV2 answers line by line and tile by tile, so its answer is locally noisy: lines of one object get
+different classes, some get none, stray lines are called wall. A drawing is not noisy in that way, and each
+module states one fact about drawings and uses it to correct the answer or the result built from it. The
+modules are independent, each can be switched off in `config.json` (`reasoning.*`, `engine_overrides`), none
+reads drawing-specific names or sizes, and each logs what it changed (web app: SymPointV2 panel and Drawing
+info; CLI: printed after `build`).
+
+| module | fact | what it does |
+|---|---|---|
+| label consensus (`label_consensus.py`), before extraction | an entity is one object; a block is one object inserted many times; a layer holds one kind of thing; layers have names | a stray label on a small part of a polyline is dropped; a block line gets the class most inserts got, a symbol-sized block that is mostly door / window / furniture is that as a whole; in a layer the model labels consistently (>= 85 % one kind) the unlabelled lines get that class and "wall" lines in a symbol layer follow it; wall lines in a big layer the model otherwise ignores are dropped; where the model is silent the layer name (approach 1's keyword table) gives a weak label, and wall labels on layers named annotation / dimension / grid / hatch / furniture are dropped |
+| room names (`architectural_converter/topology/label_rules.py`), in topology | one room has one name; a named space is a room | a room holding names of different kinds (balcony + bedroom) misses a wall: the missing-wall hypothesis that separates the names becomes a wall (review status); names that are commonly open to each other (living / dining / kitchen ...) may share a room. A room with several names is never typed "balcony" from one of them |
+| wall structure (`wall_structure.py`), after rooms | walls of a building enclose rooms and carry doors and windows | a group of connected walls none of which bounds a room or hosts a door / window is rejected when small or far from every room (details, site lines, furniture), kept for review when large |
+| enclosed floors (`architectural_converter/topology/ground.py`), in validation | the inside of a building has a floor | an area without a room gets a ground slab when at least 60 % of its edge is building, whatever the width of the side left open (before: only notches up to 4 m wide) |
+
+`--no-reasoning` (CLI) or the "reasoning on the model's answer" checkbox (web app; rebuilds from the cached
+answer without a new GPU run) gives the model's answer as it is, to see what the modules change.
+
+**Measured with a simulated model** (`tests/sympoint/test_reasoning.py`, and the SNOOBAR permit set with an
+oracle answer damaged like the real model fails: 10-15 % of wall lines, 60-70 % of window lines and 8 % of
+whole tiles unlabelled, 25 % of furniture and 15 % of door lines called wall, 3 % stray wall labels): without
+reasoning 67 % of the rooms of the undamaged build are found, with reasoning all of them. The real model's
+errors are not all of this kind (it can be consistently wrong about a whole layer), so check real drawings
+with the checkbox.
+
 ## Step 1 checks (`label` viewer)
 
 * **Walls:** are the wall face lines brown and continuous? Are door leaves, glazing or furniture wrongly brown?

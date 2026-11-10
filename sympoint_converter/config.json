@@ -77,8 +77,50 @@
     "gap_min_share": 0.5,
     "gap_min_labelled_m": 0.3
   },
+  "reasoning": {
+    "_doc": "Reasoning on top of the model's answer (sympoint_converter/reasoning/). Every module can be switched off; none reads drawing-specific names or sizes.",
+    "label_consensus": {
+      "_doc": "Blocks, layers and layer names vote on the line labels (label_consensus.py).",
+      "enabled": true,
+      "keep_model_score": 0.8,
+      "blocks": {
+        "enabled": true,
+        "min_labelled_share": 0.5,
+        "min_purity": 0.7,
+        "symbol_max_size_m": 6.0,
+        "whole_min_coverage": 0.3,
+        "whole_min_purity": 0.7
+      },
+      "layers": {
+        "enabled": true,
+        "min_entities": 10,
+        "min_length_m": 5.0,
+        "fill_min_coverage": 0.25,
+        "fill_min_purity": 0.85,
+        "fill_score": 0.6,
+        "background_max_coverage": 0.03,
+        "background_max_coverage_named": 0.15,
+        "fill_min_coverage_wall": 0.5
+      },
+      "names": {
+        "enabled": true,
+        "min_name_score": 0.6,
+        "score": 0.5
+      },
+      "min_entity_labelled_share": 0.3
+    },
+    "wall_structure": {
+      "_doc": "Wall groups that enclose no room and host no door / window (wall_structure.py): small or far groups are rejected, others kept for review.",
+      "enabled": true,
+      "small_group_max_walls": 6,
+      "small_group_max_length_m": 20.0,
+      "far_from_rooms_m": 3.0,
+      "far_group_max_walls": 20,
+      "far_group_max_length_m": 60.0
+    }
+  },
   "engine_overrides": {
-    "_doc": "Merged into approach 1's configuration for the shared build stages: weights of the evidence approach 2 produces (approach 1's own config files are not changed).",
+    "_doc": "Merged into approach 1's configuration for the shared build stages: weights of the evidence approach 2 produces, and the shared reasoning rules approach 2 switches on (approach 1's own config files are not changed).",
     "detection": {
       "weights": {
         "wall": {
@@ -102,7 +144,19 @@
       }
     },
     "phase2": {
-      "stack_levels": false
+      "stack_levels": false,
+      "ground": {
+        "wide_close_m": [
+          4.0,
+          6.0
+        ],
+        "min_enclosure": 0.6
+      }
+    },
+    "reconstruction": {
+      "label_rules": {
+        "enabled": true
+      }
     }
   }
 }

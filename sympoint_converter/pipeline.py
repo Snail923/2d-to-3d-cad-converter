@@ -41,6 +41,16 @@ class SymPointPipeline(ExtractionPipeline):
         labels, prims, req, resp, source = get_labels(st.drawing, st.input_file, self.sp, self.url, self.response,
                                                       progress=self.labels_progress)
         st.timings["detect:sympoint_labels"] = round(time.perf_counter() - t0, 4)
+        t0 = time.perf_counter()
+        st.sp_labels_model = labels
+        from .reasoning.label_consensus import refine_labels
+        try:
+            labels, clog = refine_labels(st.drawing, st.ctx.layers, prims, labels, self.sp)
+        except Exception as e:  # noqa: BLE001  (a reasoning module must never stop the run)
+            clog = {"error": f"{type(e).__name__}: {e}"}
+            st.drawing.issues.append({"stage": "detect", "severity": "warning",
+                                      "message": f"approach 2: label consensus skipped: {clog['error']}"})
+        st.timings["detect:label_consensus"] = round(time.perf_counter() - t0, 4)
         st.sp_labels, st.sp_prims, st.sp_request, st.sp_response = labels, prims, req, resp
         t0 = time.perf_counter()
         cands, log = extract(st.drawing, st.ctx, prims, labels, self.sp, st.ctx.ids)
@@ -53,7 +63,7 @@ class SymPointPipeline(ExtractionPipeline):
         st.ids_after_detect = copy.deepcopy(st.ctx.ids)
         st.logs["detect"] = {"approach": "sympoint", "labels_source": source, "tiles": len(req["tiles"]),
                              "primitives": len(prims), "labelled_entities": len(labels["entities"]),
-                             "model_seconds": resp.get("seconds"), **log}
+                             "model_seconds": resp.get("seconds"), "label_consensus": clog, **log}
 
     def _stage_reconstruct(self, st):
         super()._stage_reconstruct(st)
@@ -61,7 +71,23 @@ class SymPointPipeline(ExtractionPipeline):
         st.logs["reconstruct"]["gap_typing"] = type_gaps(st._generic, st.doors, st.windows, st.walls,
                                                          st.sp_prims, st.sp_labels, self.sp)
 
+    def _stage_topology(self, st):
+        super()._stage_topology(st)
+        from .reasoning.wall_structure import prune_wall_groups
+        try:
+            wlog = prune_wall_groups(st.building, st.ctx.tol, self.sp)
+        except Exception as e:  # noqa: BLE001  (a reasoning module must never stop the run)
+            wlog = {"error": f"{type(e).__name__}: {e}"}
+            st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                      "message": f"approach 2: wall structure check skipped: {wlog['error']}"})
+        prev = getattr(st, "_wall_structure_log", None)        # topology can run twice (door / name rules)
+        if prev and "error" not in wlog and "skipped" not in wlog and "skipped" not in prev and "error" not in prev:
+            wlog = {k: round(wlog[k] + prev[k], 2) for k in wlog}
+        st._wall_structure_log = wlog
+        st.logs["topology"]["wall_structure"] = wlog
+
     def _stage_resolve(self, st):
+        st._wall_structure_log = None
         c = st.ctx.candidates
         walls = list(c.get("sympoint_walls", []))
         doors = list(c.get("sympoint_doors", []))

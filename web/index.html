@@ -110,6 +110,7 @@
           (or use <code>python -m sympoint_converter web</code>, which also opens this page).</p>
         <div class="aigrid small"><label>address <input id="spEndpoint" type="text" spellcheck="false"></label>
           <label>tile size (m) <input id="spTile" type="number" step="1" min="5" max="60"></label></div>
+        <label class="small" title="Label consensus (blocks, layers, layer names), wall structure, room names, enclosed floors. Switch off to see the model's answer as it is; the drawing is rebuilt from the cached answer, without a new GPU run."><input id="spReasoning" type="checkbox" checked> reasoning on the model's answer</label>
         <div class="row"><button id="spTest" class="btn small">Test connection</button></div>
         <div id="spStatus" class="small"></div>
         <div id="spLegend" class="small"></div>

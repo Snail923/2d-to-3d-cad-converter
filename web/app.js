@@ -58,7 +58,7 @@ const S = {
   method: "rules", show: "rules", results: {}, corrByMethod: {}, spAvailable: false, spCache: new Map(), cancelled: false,
 };
 const SP_KEY = "cad2d3d.method";
-const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false };
+const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false, reasoning: true };
 try { Object.assign(SPC, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
 function saveSpc() { try { localStorage.setItem(SP_KEY, JSON.stringify(SPC)); } catch { /* private mode */ } }
 const METHOD_NAME = { rules: "approach 1 (rules)", sympoint: "approach 2 (SymPointV2)" };
@@ -271,7 +271,7 @@ async function runSymPoint(name, buf) {
   S.busy = true; S.cancelled = false;
   startJob(`Approach 2 (SymPointV2): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
   const t0 = performance.now();
-  const config = { tile_m: +SPC.tile || 20 };
+  const config = { tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false };
   const key = `${name}|${buf.byteLength}|${config.tile_m}`;
   try {
     let resp = S.spCache.get(key);
@@ -320,6 +320,8 @@ async function runSymPoint(name, buf) {
     $("#spBadge").textContent = "on";
     $("#spStatus").innerHTML = `<span class="ok">Done:</span> ${sp.extract.labelled_entities.toLocaleString()} DXF entities labelled` +
       (sp.model_seconds ? ` in ${sp.model_seconds} s on the GPU` : "") + ".";
+    $("#spStatus").innerHTML += `<details open><summary>reasoning on the model's answer${SPC.reasoning === false ? " (off)" : ""}</summary><table class="grid small">` +
+      (sp.reasoning || []).map(([m, t]) => `<tr><td>${esc(m)}</td><td>${esc(t)}</td></tr>`).join("") + "</table></details>";
     setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
       (S.results.sympoint.safeMode ? " (safe mode after a geometry error: no door rules / ground fill — see the SymPointV2 panel)" : ""));
     if (S.results.sympoint.safeMode) $("#spStatus").innerHTML += `<details><summary>first attempt crashed (details)</summary><pre class="mono small" style="white-space:pre-wrap">${esc(S.results.sympoint.safeMode)}</pre></details>`;
@@ -383,6 +385,14 @@ function initMethodUi() {
   $("#spEndpoint").addEventListener("change", () => { SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc(); });
   $("#spTile").addEventListener("change", () => { SPC.tile = Math.max(5, Math.min(60, +$("#spTile").value || 20)); $("#spTile").value = SPC.tile; saveSpc(); });
   $("#spColour").addEventListener("change", () => { SPC.colour = $("#spColour").checked; saveSpc(); if (S.view) draw2d(true); renderSpLegend(); });
+  $("#spReasoning").checked = SPC.reasoning !== false;
+  $("#spReasoning").addEventListener("change", async () => {
+    SPC.reasoning = $("#spReasoning").checked; saveSpc();
+    if (S.fileBytes && !S.busy && S.results.sympoint) {           // rebuild from the cached model answer (no GPU run)
+      delete S.results.sympoint;
+      await applyMethod();
+    }
+  });
   $("#spTest").addEventListener("click", spTest);
   for (const b of $$("#showSwitch [data-show]")) b.addEventListener("click", () => !S.busy && show(b.dataset.show));
   updateMethodUi();
@@ -956,6 +966,7 @@ function renderInfo() {
     ${S.data.sympoint ? `<h3>Approach 2: SymPointV2 labels → elements</h3><table class="grid">
       <tr><td>labelled share of line length</td><td>${(100 * S.data.sympoint.summary.labelled_length_share).toFixed(1)}%</td></tr>
       <tr><td>groups</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.summary.groups))}</td></tr>
+      ${(S.data.sympoint.reasoning || []).map(([m, t]) => `<tr><td>reasoning: ${esc(m)}</td><td>${esc(t)}</td></tr>`).join("")}
       <tr><td>extraction</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.extract))}</td></tr></table>` : ""}
     <h3>Stage logs (${esc(METHOD_NAME[S.show] || "")})</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
 }

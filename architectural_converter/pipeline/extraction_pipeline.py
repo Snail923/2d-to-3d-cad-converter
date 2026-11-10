@@ -267,8 +267,8 @@ class ExtractionPipeline:
         th = cfg["detection"]["status_thresholds"]
         gate = cfg["detection"].get("gates", {}).get("wall")
         for w in live:
-            if "door_implied" in w.detection_methods and w.manual_status is None:
-                continue                      # added by the door rules: keeps its own confidence
+            if w.detection_methods & {"door_implied", "label_implied"} and w.manual_status is None:
+                continue                      # added by the door / room-name rules: keeps its own confidence
             w.score(ww, th, gate)
         for kind, coll in (("door", st.doors), ("window", st.windows)):
             for o in coll:
@@ -323,6 +323,14 @@ class ExtractionPipeline:
                     promoted = []
                     st.drawing.issues.append({"stage": "topology", "severity": "warning",
                                               "message": f"door rules (rooms with a door) skipped: {type(e).__name__}: {e}"})
+                try:
+                    from ..topology.label_rules import promote_label_rooms
+                    named, nlog = promote_label_rooms(hyps, hrooms, tol, cfg, st.ctx.ids, live_rooms, walls)
+                    promoted = promoted + named
+                    st.logs["label_rules_first_pass"] = nlog
+                except Exception as e:  # noqa: BLE001
+                    st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                              "message": f"room-name rules skipped: {type(e).__name__}: {e}"})
                 if promoted:
                     # a room with a door needs all its walls: the closing hypotheses become walls,
                     # and rooms are detected again with them
@@ -354,6 +362,7 @@ class ExtractionPipeline:
         st.building = b
         st.solid = solid
         st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "door_rules": dlog,
+                               "room_names": st.logs.get("label_rules_first_pass", {}),
                                "door_room_walls": st.logs.get("door_rules_first_pass", {}).get("room_walls_promoted", []),
                                "wall_graph_components": _ncomp(G_walls),
                                "axis_graph": {"nodes": G_axis.number_of_nodes(), "edges": G_axis.number_of_edges(),
@@ -464,7 +473,8 @@ class ExtractionPipeline:
         outline = [g for g in polygons_of(b.footprint) if on_plans(g)]
         try:
             pieces = unassigned_floor(outline, [g for g in cover if g is not None and on_plans(g)],
-                                      gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4))
+                                      gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4),
+                                      gc.get("wide_close_m", ()), gc.get("min_enclosure", 0.6))
         except Exception as e:  # noqa: BLE001  (an optional check must never stop the pipeline)
             st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                       "message": f"ground coverage check skipped: {type(e).__name__}: {e}"})

@@ -161,8 +161,9 @@ def drop_unused(walls, rooms) -> list:
     bound = {wid for r in rooms if _live(r) for wid in r.bounding_walls}
     out = []
     for w in walls:
-        if "door_implied" in w.detection_methods and _live(w) and w.manual_status is None and w.id not in bound:
-            w.veto("door rule: the added wall does not close a room")
+        if w.detection_methods & {"door_implied", "label_implied"} and _live(w) and w.manual_status is None \
+                and w.id not in bound:
+            w.veto("door / room-name rule: the added wall does not close a room")
             out.append(w.id)
     return out
 

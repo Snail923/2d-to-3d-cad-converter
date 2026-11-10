@@ -28,13 +28,22 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+# "use_reasoning": false = the model's answer as it is (to see what the reasoning modules change)
+REASONING_OFF = {"reasoning": {"label_consensus": {"enabled": False}, "wall_structure": {"enabled": False}},
+                 "engine_overrides": {"reconstruction": {"label_rules": {"enabled": False}},
+                                      "phase2": {"ground": {"wide_close_m": []}}}}
+
+
 def load_config(overrides: dict | None = None) -> dict:
     """config.json deep-merged with ``overrides`` (None values are ignored)."""
     with open(CONFIG_PATH, encoding="utf-8") as fh:
         cfg = json.load(fh)
     if os.environ.get("SYMPOINT_URL"):
         cfg["service"]["url"] = os.environ["SYMPOINT_URL"]
-    return _merge(cfg, overrides or {})
+    cfg = _merge(cfg, overrides or {})
+    if cfg.get("use_reasoning") is False:
+        cfg = _merge(cfg, REASONING_OFF)
+    return cfg
 
 
 __all__ = ["BG", "CLASSES", "COLORS", "GROUPS", "GROUP_OF", "export_tiles", "labels_from_response",

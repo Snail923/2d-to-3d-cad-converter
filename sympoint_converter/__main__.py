@@ -36,7 +36,8 @@ def _cfg(a, **extra):
     over = {"tile_m": getattr(a, "tile_m", None), "overlap_m": getattr(a, "overlap_m", None),
             "min_label_score": getattr(a, "min_score", None),
             "include_hatch_boundaries": True if getattr(a, "hatches", False) else None,
-            "cache_labels": False if getattr(a, "no_cache", False) else None, **extra}
+            "cache_labels": False if getattr(a, "no_cache", False) else None,
+            "use_reasoning": False if getattr(a, "no_reasoning", False) else None, **extra}
     if getattr(a, "no_autostart", False):
         over["service"] = {"autostart": False}
     return load_config(over)
@@ -158,6 +159,9 @@ def cmd_build(a):
     lg = st.logs["detect"]
     print("approach 2 (SymPointV2): " + " ".join(f"{k}={v}" for k, v in c.items())
           + f"  ({time.time() - t0:.1f} s, labels: {lg['labels_source']})")
+    from .reasoning import summary
+    for name, what in summary(st):
+        print(f"  reasoning / {name}: {what}")
     print(f"outputs: {base}.*  (model.json, model.sqlite, overlay.svg, report.html, labels viewer .html"
           f"{', glb' if not a.no_3d else ''})")
     return 0
@@ -306,12 +310,15 @@ def main(argv=None):
     b.add_argument("--tile-m", type=float)
     b.add_argument("--corrections", help="manual corrections JSON (same format as approach 1)")
     b.add_argument("--no-3d", action="store_true")
+    b.add_argument("--no-reasoning", action="store_true",
+                   help="the model's answer as it is: no label consensus, wall structure, room-name or floor rules")
 
     c = sub.add_parser("compare", help="approach 1 vs approach 2 on the same drawings")
     c.add_argument("inputs", nargs="*")
     common(c)
     c.add_argument("--tile-m", type=float)
     c.add_argument("--benchmark", action="store_true", help="add the 13 benchmark drawings (scored against references)")
+    c.add_argument("--no-reasoning", action="store_true", help="approach 2 without its reasoning modules")
 
     w = sub.add_parser("web", help="serve the web app with both methods (starts the GPU service, opens the browser)")
     w.add_argument("--port", type=int, default=8000)

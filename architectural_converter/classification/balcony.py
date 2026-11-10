@@ -147,11 +147,8 @@ def detect_balconies(b, cfg, tol, drawing=None) -> dict:
     for r in b.rooms.values():
         if not _live(r) or r.polygon is None or r.is_hypothesis:
             continue
-        ltype = None
-        for t in r.label_texts:
-            ltype = room_type_of(t, kw)
-            if ltype:
-                break
+        from ..topology.label_rules import room_label_type  # noqa: PLC0415
+        ltype = room_label_type(r, kw)            # a balcony name next to an indoor name: not a balcony
         if ltype and ltype != "balcony":
             continue
         ring = r.polygon.exterior

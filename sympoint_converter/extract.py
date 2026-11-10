@@ -24,6 +24,7 @@ import math
 
 import numpy as np
 from shapely.geometry import LineString, MultiPoint, Point, Polygon
+from shapely.geometry import box as _box
 from shapely.strtree import STRtree
 
 from architectural_converter.geometry.geometric_utils import (canonical_dir, dot, frame_point, make_valid_polygonal,
@@ -436,12 +437,23 @@ class Extractor:
         # a closed outline that is part of a wall line (a pier between two openings, drawn as its own
         # closed polyline) is a wall, not a column
         piers = 0
+        lw_tree = STRtree([w.polygon() for w in long_walls]) if long_walls else None
         for cc in list(cols):
-            inside = [w for w in long_walls if safe_buffer(cc.polygon, 0.01).contains(w.polygon())]
+            grown = safe_buffer(cc.polygon, 0.01)
+            inside = [long_walls[int(k)] for k in lw_tree.query(grown)
+                      if grown.contains(long_walls[int(k)].polygon())] if lw_tree is not None else []
             if inside and any(self._in_wall_line(w, [v for v in long_walls if v is not w]) for w in inside):
                 cols.remove(cc)
                 piers += 1
         self.log["outline_piers_kept_as_walls"] = piers
+        grown_cols = [safe_buffer(cc.polygon, 0.01) for cc in cols]
+        col_tree = STRtree(grown_cols) if grown_cols else None
+        new_cols = []                        # columns found below (few): checked one by one
+
+        def col_hit(poly, pred):
+            if col_tree is not None and any(getattr(grown_cols[int(k)], pred)(poly) for k in col_tree.query(poly)):
+                return True
+            return any(getattr(g, pred)(poly) for g in new_cols)
         for w in walls:
             if w.kind == "straight" and getattr(w, "_short", False):
                 ends = self._closed_ends(w)
@@ -454,12 +466,13 @@ class Extractor:
                 if ends == 2 and not self._in_wall_line(w, long_walls) and \
                         lo <= min(w.thickness, w.length) and max(w.thickness, w.length) <= hi:
                     poly = w.polygon()
-                    if not any(safe_buffer(cc.polygon, 0.01).intersects(poly) for cc in cols):
+                    if not col_hit(poly, "intersects"):
                         cols.append(self._column(poly, set(w.source_entities), "rectangular"))
+                        new_cols.append(safe_buffer(cols[-1].polygon, 0.01))
                     continue
                 keep.append(w)                 # a short wall nib / pier
                 continue
-            if w.kind == "straight" and any(safe_buffer(cc.polygon, 0.01).contains(w.polygon()) for cc in cols):
+            if w.kind == "straight" and col_hit(w.polygon(), "contains"):
                 continue                     # the two sides of a column outline paired as a "wall"
             keep.append(w)
         self.log["end_cap_pairs_dropped"] = caps
@@ -475,9 +488,13 @@ class Extractor:
         lo, hi = w.c - w.thickness / 2, w.c + w.thickness / 2
         ends = {0: [], 1: []}
         band = safe_buffer(w.polygon(), tol)
-        for k in self._wall_idx:
+        if getattr(self, "_wall_line_tree", None) is None:
+            self._wall_lines = [strokes[k].line() for k in self._wall_idx]
+            self._wall_line_tree = STRtree(self._wall_lines)
+        for j in self._wall_line_tree.query(band):
+            k = self._wall_idx[int(j)]
             st = strokes[k]
-            if abs(dot(st.u, w.u)) > 0.05 or not band.intersects(st.line()):
+            if abs(dot(st.u, w.u)) > 0.05 or not band.intersects(self._wall_lines[int(j)]):
                 continue
             s_mid = dot(((st.p0[0] + st.p1[0]) / 2, (st.p0[1] + st.p1[1]) / 2), w.u)
             a, b = sorted((dot(st.p0, n), dot(st.p1, n)))
@@ -559,7 +576,8 @@ class Extractor:
                     x = parent[x]
                 return x
             for a, g in enumerate(geoms):
-                for b in tree.query(safe_buffer(g, gap)):
+                x0, y0, x1, y1 = g.bounds
+                for b in tree.query(_box(x0 - gap, y0 - gap, x1 + gap, y1 + gap)):
                     b = int(b)
                     if b > a and geoms[b].distance(g) <= gap:
                         parent[find(a)] = find(b)
@@ -625,13 +643,14 @@ class Extractor:
             groups.append(g)
         members = [[a[0] for a in g] for g in groups]
         arc_ids = {a[0] for a in arcs}
+        centres = np.asarray([a[1] for g in groups for a in g], float)
+        group_of = [gi for gi, g in enumerate(groups) for _ in g]
         for k in ks:
             if k in arc_ids:
                 continue
             P = np.asarray(self.prims[k][5], float)
-            best = min(range(len(groups)), key=lambda gi: min(
-                float(np.min(np.linalg.norm(P - np.asarray(a[1]), axis=1))) for a in groups[gi]))
-            members[best].append(k)
+            d = np.linalg.norm(P[:, None, :] - centres[None, :, :], axis=2).min(axis=0)
+            members[group_of[int(np.argmin(d))]].append(k)
         return list(zip(members, groups))
 
     def _swing_chord(self, arcs, straight, tree):

@@ -19,6 +19,7 @@ from architectural_converter import web_bridge as wb1
 from . import load_config
 from .classes import CLASSES, COLORS, GROUP_OF
 from .pipeline import SymPointPipeline
+from .reasoning import summary
 from .sympoint_io import export_tiles, load_drawing
 
 _SP: dict = {}
@@ -80,7 +81,7 @@ def _with_labels(payload: str, st) -> str:
     summ = summarize(st.sp_prims, lab)
     extra = {"entity_class": ents, "classes": CLASSES, "colors": [list(COLORS[c]) for c in CLASSES],
              "groups": [GROUP_OF.get(c, "other") for c in CLASSES], "summary": summ, "extract": log,
-             "model_seconds": (st.sp_response or {}).get("seconds")}
+             "model_seconds": (st.sp_response or {}).get("seconds"), "reasoning": summary(st)}
     return payload[:-1] + ',"sympoint":' + json.dumps(extra, separators=(",", ":")) + "}"
 
 

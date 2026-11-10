@@ -87,3 +87,16 @@ def test_safe_mode_and_floor_layout_switch(both):
     assert logs["topology"]["door_rules"].get("skipped") == "disabled" and logs["topology"]["recovery"].get("skipped")
     m = json.loads(wb2.mesh(True))
     assert "meshes" in m and "stacked_in_3d" in m["metadata"]
+
+
+def test_reasoning_summary_and_switch(both):
+    path, _, _, p2 = both
+    req = json.loads(wb2.request(path, json.dumps({"tile_m": 20})))
+    names = [m for m, _ in p2["sympoint"]["reasoning"]]
+    assert names == ["label consensus", "room names", "wall structure", "floors"]
+    assert "changed" in p2["sympoint"]["extract"]["label_consensus"]
+    off = json.loads(wb2.process(path, json.dumps(oracle_answer(req)), None,
+                                 json.dumps({"tile_m": 20, "use_reasoning": False})))
+    what = dict(off["sympoint"]["reasoning"])
+    assert what["label consensus"] == "off" and what["room names"] == "off" and what["wall structure"] == "off"
+    wb2.process(path, json.dumps(oracle_answer(req)), None, json.dumps({"tile_m": 20}))   # leave the fixture's state
