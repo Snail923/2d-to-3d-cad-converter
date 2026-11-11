@@ -44,7 +44,7 @@
     "max_overhang_m": 3.0
   },
   "pitched_roof": {
-    "_doc": "Attic / roof storeys (level name matches level_slabs.no_roof_names) get a pitched hip roof (reconstruction3d/roof.py). Outline: the roof plan of the drawing when it has one (areas hatched with a roof-tile pattern: hatch_patterns are matched in the hatch pattern and layer name; the untiled middle is a hole), else the storey's walled part; never wider than the storey below plus overhang_m. Shape: every side of the outline carries a plane rising inwards at pitch_deg, starting knee_wall_m above the attic floor and rising at most to the storey height (max_height_m overrides; above it the roof is flat). The attic's walls, columns and glazing are trimmed under the slope. tile: the roof surface is laid in courses of tiles (course_m exposed length up the slope, each course standing thickness_m proud at its lower edge), coloured alternately with colors.",
+    "_doc": "Attic / roof storeys (level name matches level_slabs.no_roof_names) get a pitched hip roof (reconstruction3d/roof.py). Outline: the roof plan of the drawing when it has one (areas hatched with a roof-tile pattern: hatch_patterns are matched in the hatch pattern and layer name), else the storey's walled part; never wider than the storey below plus overhang_m. The outline is then made regular (regularize, topology/roof_plan.py): notches narrower than dormer_max_width_m (dormers, label boxes, gaps of the hatch) are closed and those entered from the eave line at least dormer_min_depth_m deep are kept as dormers; holes smaller than fill_holes_below_m2 are filled (larger ones stay open: a court); an untiled pocket inside the roof's closure (abutment_closing_m) that holds enclosed rooms of the storey and is bordered by the roof on at least abutment_min_enclosure of its perimeter is a core rising through the roof: its rooms and the walls around them (abutment_wall_margin_m around the rooms when no walls were found) become part of the roof body (flat top, not tiled); sides within angle_tol_deg of the building's main directions are squared to them and jogs shorter than min_edge_m removed (a part changing by more than max_area_change is kept as drawn). Shape: the straight skeleton of the outline (every side carries a plane rising inwards at pitch_deg), starting knee_wall_m above the attic floor and rising at most to the storey height (max_height_m overrides; above it the roof is flat). The attic's walls, columns and glazing are trimmed under the slope (points less than outside_tolerance_m outside the roof count as on its edge); with walls_outside_roof 'parapet', the outside_roof_types elements standing outside the roof (terrace edges) are capped at railing_height_m ('keep' leaves them). dormers: gabled boxes on the eave line, gable roof at pitch_deg, left out when the main roof is less than min_rise_m above the eave at the dormer's tip. tile: the roof surface is laid in courses of tiles (course_m exposed length up the slope, each course standing thickness_m proud at its lower edge), coloured alternately with colors.",
     "enabled": true,
     "from_roof_plan": true,
     "hatch_patterns": [
@@ -63,6 +63,31 @@
     "knee_wall_m": 1.0,
     "max_height_m": null,
     "min_area_m2": 10.0,
+    "regularize": {
+      "enabled": true,
+      "dormer_max_width_m": 1.6,
+      "dormer_min_depth_m": 0.5,
+      "dormer_min_area_m2": 0.3,
+      "fill_holes_below_m2": 4.0,
+      "angle_tol_deg": 8.0,
+      "min_edge_m": 0.25,
+      "abutment_closing_m": 4.0,
+      "abutment_min_area_m2": 2.0,
+      "abutment_wall_margin_m": 0.35,
+      "abutment_min_enclosure": 0.5,
+      "max_area_change": 0.08
+    },
+    "dormers": {
+      "enabled": true,
+      "pitch_deg": 45.0,
+      "min_rise_m": 0.4
+    },
+    "walls_outside_roof": "parapet",
+    "outside_roof_types": [
+      "wall",
+      "column"
+    ],
+    "outside_tolerance_m": 0.3,
     "tile": {
       "course_m": 0.35,
       "thickness_m": 0.05,

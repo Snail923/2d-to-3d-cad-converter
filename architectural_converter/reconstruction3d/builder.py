@@ -265,13 +265,20 @@ def _level_slabs(out, p2, levels) -> dict:
 def _pitched_roofs(out, p2, levels, view, level_of) -> None:
     """Attic / roof storeys: a tiled hip roof over the footprint Phase 1 gives (building.levels[].roof),
     and everything of that storey trimmed under its slope (the attic room is inside the roof).
-    Runs before the storeys are moved to their levels: z = 0 is the attic floor."""
-    from .roof import as_polygon, hip_roof, roof_height_at
+    Runs before the storeys are moved to their levels: z = 0 is the attic floor.
+
+    * Cores rising through the roof (footprint abutments) get a flat top at the roof's top height
+      and closed sides; what stands in them keeps its height up to that top.
+    * Dormers (footprint dormers) are gabled boxes on the eave line.
+    * Walls of the storey that stand outside the roof (terrace edges) are parapets: capped at
+      railing_height_m (``walls_outside_roof``: "parapet", or "keep")."""
+    from .roof import as_polygon, dormer_meshes, hip_roof
     pr = p2.get("pitched_roof", {})
     if not pr.get("enabled", True):
         return
     tile = pr.get("tile", {})
     cols = tile.get("colors") or [COLORS["roof_tiles"]]
+    dcfg = pr.get("dormers", {})
     of = {e["id"]: e.get("level") for k in ("walls", "openings", "columns", "stairs") for e in view.get(k, [])}
     for lv in levels.values():
         roof = lv.get("roof") or {}
@@ -282,7 +289,7 @@ def _pitched_roofs(out, p2, levels, view, level_of) -> None:
         total = pr.get("max_height_m") or lv.get("height") or p2["wall_height_m"]
         eave = knee - over * np.tan(np.radians(pitch))         # an overhanging eave hangs below the knee-wall top
         max_rise = max(0.3, float(total) - eave)
-        rows, decks, rise, courses = ([], []), [], 0.0, 0
+        rows, decks, sides, dw, dr, surfaces, rise = ([], []), [], [], [], [], [], 0.0
         for fp in roof["footprint"]:
             try:
                 r = hip_roof(fp, pitch, max_rise, eave, float(tile.get("course_m", 0.35)),
@@ -294,6 +301,20 @@ def _pitched_roofs(out, p2, levels, view, level_of) -> None:
                     rows[k].append(r["courses"][k])
             if len(r["deck"][1]):
                 decks.append(r["deck"])
+            if len(r["abutment_sides"][1]):
+                sides.append(r["abutment_sides"])
+            if r["surface"] is not None:
+                surfaces.append(r["surface"])
+                if dcfg.get("enabled", True) and isinstance(fp, dict):
+                    for d in fp.get("dormers") or []:
+                        try:
+                            m = dormer_meshes(d, r["surface"], eave, float(dcfg.get("pitch_deg", 45.0)),
+                                              float(dcfg.get("min_rise_m", 0.4)))
+                        except Exception:  # noqa: BLE001
+                            m = None
+                        if m:
+                            dw.append(m[0])
+                            dr.append(m[1])
             rise = max(rise, r["rise"])
         if not rows[0] and not rows[1]:
             continue
@@ -302,26 +323,47 @@ def _pitched_roofs(out, p2, levels, view, level_of) -> None:
                 V, F = _merge(rows[k])
                 out.add(f"{lv['id']}{sfx}", "roof", "pitched_roof", V, F, cols[k % len(cols)])
                 level_of[f"{lv['id']}{sfx}"] = lv["id"]
-        if decks:
-            V, F = _merge(decks)
-            out.add(f"{lv['id']}_roof_deck", "roof", "roof_deck", V, F, tile.get("deck_color") or COLORS["ground"])
-            level_of[f"{lv['id']}_roof_deck"] = lv["id"]
+        for mid, cls, parts, color in ((f"{lv['id']}_roof_deck", "roof_deck", decks, tile.get("deck_color") or COLORS["ground"]),
+                                       (f"{lv['id']}_roof_core", "roof_abutment", sides, COLORS["exterior_wall"]),
+                                       (f"{lv['id']}_dormers", "dormer", dw, COLORS["exterior_wall"]),
+                                       (f"{lv['id']}_dormer_roofs", "dormer_roof", dr, cols[0])):
+            if parts:
+                V, F = _merge(parts)
+                out.add(mid, "roof", cls, V, F, color)
+                level_of[mid] = lv["id"]
         # trim the storey's own elements under the slope (a chord under a roof plane stays under it);
-        # what stands in the open middle (a core) keeps its height
-        fps = [as_polygon(fp) for fp in roof["footprint"]]
+        # what stands in a core keeps its height up to the core's top; what stands outside the roof
+        # (on a terrace) is a parapet: nothing up there is carried by it
+        near_m = float(pr.get("outside_tolerance_m", 0.3))
+        parapet = float(p2.get("railing_height_m", 1.1)) if pr.get("walls_outside_roof", "parapet") == "parapet" else None
+        cap_types = set(pr.get("outside_roof_types", ["wall", "column"]))
+        trimmed = outside = 0
         for m in out.meshes:
             base = m["id"].removesuffix("_glass")
             if m["type"] in ("floor", "roof") or (of.get(m["id"]) or of.get(base)) != lv["id"]:
                 continue
             Vm = m["vertices"]
+            capped = False
             for i in np.nonzero(Vm[:, 2] > 1e-6)[0]:
-                z = roof_height_at(float(Vm[i, 0]), float(Vm[i, 1]), fps, pitch, max_rise, eave)
-                if z is not None and Vm[i, 2] > z - 0.02:
-                    Vm[i, 2] = max(0.0, z - 0.02)
+                z = None
+                for s in surfaces:
+                    h = s.height(float(Vm[i, 0]), float(Vm[i, 1]), near_m)
+                    if h is not None:
+                        z = h if z is None else max(z, h)
+                if z is not None:
+                    if Vm[i, 2] > z - 0.02:
+                        Vm[i, 2] = max(0.0, z - 0.02)
+                        trimmed += 1
+                elif parapet is not None and (m["type"] in cap_types or base != m["id"]) and Vm[i, 2] > parapet + 1e-6:
+                    Vm[i, 2] = parapet
+                    capped = True
+            outside += capped
         out.metadata.setdefault("pitched_roofs", []).append(
             {"level": lv["id"], "name": lv.get("name"), "pitch_deg": pitch, "eave_m": round(float(eave), 3),
              "ridge_m": round(float(eave + rise), 3), "footprint": roof.get("source"),
              "open_middle": any(isinstance(fp, dict) and fp.get("holes") for fp in roof["footprint"]),
+             "abutments": sum(len(fp.get("abutments") or []) for fp in roof["footprint"] if isinstance(fp, dict)),
+             "dormers": len(dw), "capped_outside_roof": outside, "vertices_trimmed": trimmed, "regularization": roof.get("regularization"),
              "tile": {"course_m": tile.get("course_m", 0.35), "thickness_m": tile.get("thickness_m", 0.05)}})
 
 

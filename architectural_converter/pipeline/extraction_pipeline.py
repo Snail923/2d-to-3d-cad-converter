@@ -539,7 +539,7 @@ class ExtractionPipeline:
         from shapely.affinity import translate
         from ..geometry.geometric_utils import polygons_of, robust_intersection, robust_union, safe_buffer
         from shapely.geometry import Polygon as _Polygon
-        from ..topology.roof_plan import roof_areas, roof_for_level
+        from ..topology.roof_plan import regularize_roof, roof_areas, roof_for_level
         pr = self.cfg["phase2"].get("pitched_roof", {})
         names = [n.lower() for n in lc.get("no_roof_names", [])]
         b = st.building
@@ -566,6 +566,7 @@ class ExtractionPipeline:
                 target = robust_union([translate(p, tx, ty) for p in lv.outline]) if lv.outline else below
                 over = float(pr.get("overhang_m", 0.0))
                 limit = safe_buffer(below, over, join_style=2) if below is not None and over > 0 else below
+                live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
                 parts, source, info = None, None, {}
                 if pr.get("from_roof_plan", True):
                     if areas is None:
@@ -576,7 +577,6 @@ class ExtractionPipeline:
                                                  float(pr.get("min_overlap", 0.6)), min_area, tuple(bl.translation))
                     source = "roof plan" if parts else None
                 if not parts:
-                    live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
                     geoms = [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis
                              and w.classification != "railing"]
                     geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis
@@ -593,17 +593,47 @@ class ExtractionPipeline:
                     if limit is not None:
                         body = robust_intersection(body, limit)
                     parts = [_Polygon(p.exterior) for p in polygons_of(body) if p.area >= min_area]
+                reg_info, abuts, dormers = None, [], []
+                reg = pr.get("regularize", {})
+                if parts and reg.get("enabled", True):
+                    # a regular outline: dormers and label boxes closed, a core rising through the roof
+                    # made part of it, sides squared to the building (topology/roof_plan.py)
+                    rooms = [translate(r.polygon, tx, ty) for r in b.rooms.values() if live(r) and not r.is_hypothesis
+                             and r.classification not in ("balcony", "terrace") and r.polygon is not None]
+                    walls = [translate(w.polygon(0.05), tx, ty) for w in b.walls.values() if live(w)
+                             and not w.is_hypothesis and w.classification != "railing"]
+                    rr = regularize_roof(robust_union(parts), rooms, source == "roof plan"
+                                         and pr.get("dormers", {}).get("enabled", True),
+                                         {k: v for k, v in reg.items() if not k.startswith("_") and k != "enabled"},
+                                         walls=[g for g in walls if g is not None and not g.is_empty])
+                    if rr and rr["parts"]:
+                        parts = [p for p in rr["parts"] if p.area >= min_area] or parts
+                        abuts, dormers, reg_info = rr["abutments"], rr["dormers"], rr["info"]
+                r5 = lambda ring: [[round(float(x - tx), 4), round(float(y - ty), 4)] for x, y in ring.coords]  # noqa: E731
                 rings = []
                 for p in parts or []:
-                    p = translate(p, -tx, -ty)                      # back onto the storey's own sheet
-                    q = p.simplify(0.03)
-                    p = q if q.geom_type == "Polygon" and q.is_valid and not q.is_empty else p
-                    r5 = lambda ring: [[round(float(x), 4), round(float(y), 4)] for x, y in ring.coords]  # noqa: E731
-                    rings.append({"exterior": r5(p.exterior), "holes": [r5(h) for h in p.interiors if _Polygon(h).area >= 0.5]})
+                    if not reg_info:
+                        q = p.simplify(0.03)
+                        p = q if q.geom_type == "Polygon" and q.is_valid and not q.is_empty else p
+                    grown = p.buffer(1e-3)
+                    entry = {"exterior": r5(p.exterior), "holes": [r5(h) for h in p.interiors if _Polygon(h).area >= 0.5]}
+                    mine = [a for a in abuts if grown.contains(a.representative_point())]
+                    if mine:
+                        entry["abutments"] = [r5(a.exterior) for a in mine]
+                    mine = [d for d in dormers if grown.contains(d["outline"].representative_point())]
+                    if mine:
+                        entry["dormers"] = [{"outline": r5(d["outline"].exterior),
+                                             "mouth": [[round(float(x - tx), 4), round(float(y - ty), 4)] for x, y in d["mouth"]],
+                                             "tip": [round(float(d["tip"][0] - tx), 4), round(float(d["tip"][1] - ty), 4)],
+                                             "width": round(d["width"], 3), "depth": round(d["depth"], 3)} for d in mine]
+                    rings.append(entry)
                 if rings:
                     lv.roof = {"kind": "pitched", "source": source, "footprint": rings}
+                    if reg_info:
+                        lv.roof["regularization"] = reg_info
                     log.setdefault(lv.id, {})["roof"] = dict(
                         info, kind="pitched", source=source, holes=sum(len(r["holes"]) for r in rings),
+                        regularization=reg_info,
                         area_m2=round(sum(_Polygon(r["exterior"], r["holes"]).area for r in rings), 2))
             except Exception as e:  # noqa: BLE001
                 st.drawing.issues.append({"stage": "validate", "severity": "warning",

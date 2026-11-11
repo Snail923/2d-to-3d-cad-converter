@@ -213,7 +213,7 @@ def test_hip_roof_surface():
     # tiles: every course stands proud at its lower edge (a sawtooth over the plane)
     t = hip_roof(ring, 45.0, course_m=0.5, thickness_m=0.05)
     Vt = np.vstack([t["courses"][0][0], t["courses"][1][0]])
-    eave = Vt[np.isclose(Vt[:, 1], 0.0) & (Vt[:, 0] > 1) & (Vt[:, 0] < 9)]
+    eave = Vt[np.isclose(Vt[:, 1], 0.0)]
     assert len(eave) and np.allclose(eave[:, 2], 0.05)
     # a height limit gives a flat deck; a hole (the untiled middle of the roof plan) stays open
     h = hip_roof({"exterior": [(0, 0), (20, 0), (20, 17), (0, 17)], "holes": [[(8, 3), (13.5, 3), (13.5, 8.5), (8, 8.5)]]},
