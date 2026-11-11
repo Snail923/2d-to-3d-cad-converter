@@ -346,3 +346,20 @@ def test_storey_outline_is_limited_to_the_other_storeys():
     # two storeys: nothing to compare with; no limit configured: nothing cut
     assert limit_overhang([([plan], (0, 0)), ([big], (0, 0))], 3.0)[1] == [0, 0]
     assert limit_overhang(three, None)[1] == [0, 0, 0]
+
+
+def test_plot_outline_far_from_the_rooms_is_not_kept_as_walls():
+    """A second sheet shows only the plot: a closed loop of double lines, 30 m from the house, long
+    enough not to be a 'small group'. Each wall joins only the next one: not the walls of a floor."""
+    doc, msp = new_doc()
+    doc.layers.add("A-WALL")
+    box_room(msp, 6, 4, 0.2)
+    msp.add_text("OFFICE", dxfattribs={"insert": (2, 2), "height": 0.2})
+    box_room_at = lambda x0, y0, w, h, t: (rect_lines(msp, x0, y0, x0 + w, y0 + h), rect_lines(msp, x0 + t, y0 + t, x0 + w - t, y0 + h - t))  # noqa: E731
+    box_room_at(40, 0, 30, 25, 0.3)
+    st = build(save(doc))
+    loop = [w for w in st.building.walls.values() if w.axis.centroid.x - min(v.axis.centroid.x for v in st.building.walls.values()) > 20]
+    assert len(loop) == 4 and sum(w.length for w in loop) > 100
+    assert all(w.status == Status.REJECTED for w in loop)
+    assert not st.ground or all(p.area < 100 for p, _ in st.ground)             # and the plot gets no floor
+    assert len(live(st.building.rooms.values())) == 1

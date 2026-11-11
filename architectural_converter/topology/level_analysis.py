@@ -257,8 +257,12 @@ def _align(points_ref: np.ndarray, points: np.ndarray, grid: float, max_pts: int
     return (float(d[0]), float(d[1])), int(counts[k]), len(a)
 
 
-def analyze_levels(walls, labels, strokes, tol, cfg, ids=None):
-    """Returns (levels, wall_level: dict wall_id -> level_id | None, log)."""
+def analyze_levels(walls, labels, strokes, tol, cfg, ids=None, structural=None):
+    """Returns (levels, wall_level: dict wall_id -> level_id | None, log).
+
+    ``structural``: ids of the walls that bound a room or carry an opening. Between two sheets of
+    the same level, the storey is the one that has rooms (a site / mass plan of that level shows
+    the plot and the building's outline, not its rooms)."""
     lc = cfg.get("levels", {}) if hasattr(cfg, "get") else {}
     gap = float(lc.get("view_gap_m", 4.0))
     live = [w for w in walls if w.status != Status.REJECTED and not w.is_hypothesis]
@@ -331,7 +335,11 @@ def analyze_levels(walls, labels, strokes, tol, cfg, ids=None):
     for lv in plans:
         by_key.setdefault(key(lv), []).append(lv)
     for lst in by_key.values():
-        lst.sort(key=lambda lv: (lv.elevation is None, -len(lv.wall_ids)))      # FFL-annotated, then largest
+        n_struct = {lv.id: sum(1 for w in lv.wall_ids if w in structural) for lv in lst} if structural is not None else {}
+        # the sheet with rooms, then FFL-annotated, then largest
+        lst.sort(key=lambda lv: (n_struct.get(lv.id, 1) == 0, lv.elevation is None, -n_struct.get(lv.id, 0), -len(lv.wall_ids)))
+        if structural is not None and n_struct.get(lst[0].id) and any(n_struct[d.id] == 0 for d in lst[1:]):
+            lst[0].sources.append("chosen among the sheets of this level: the one with rooms")
         for dup in lst[1:]:
             dup.kind = "duplicate"
             dup.sources.append(f"same level as {lst[0].id}")

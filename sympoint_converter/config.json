@@ -116,7 +116,10 @@
       "small_group_max_length_m": 20.0,
       "far_from_rooms_m": 3.0,
       "far_group_max_walls": 20,
-      "far_group_max_length_m": 60.0
+      "far_group_max_length_m": 60.0,
+      "floor_min_junction_walls": 3,
+      "floor_min_junction_share": 0.15,
+      "empty_enclosure_min_area_m2": 150.0
     }
   },
   "engine_overrides": {

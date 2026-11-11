@@ -392,7 +392,11 @@ class ExtractionPipeline:
     def _assign_levels(self, st, b, tol):
         from shapely.geometry import Point, box as _box
         from ..topology.level_analysis import analyze_levels
-        levels, wall_level, llog = analyze_levels(list(b.walls.values()), st.ctx.labels, st.ctx.strokes, tol, self.cfg)
+        live_e = lambda e: e.status != Status.REJECTED  # noqa: E731
+        structural = {wid for r in b.rooms.values() if live_e(r) and not r.is_hypothesis for wid in r.bounding_walls}
+        structural |= {o.host_wall for o in b.openings.values() if live_e(o) and o.host_wall and o.type in ("door", "window")}
+        levels, wall_level, llog = analyze_levels(list(b.walls.values()), st.ctx.labels, st.ctx.strokes, tol, self.cfg,
+                                                  structural=structural)
         st.logs["levels"] = llog
         if not llog.get("stacked"):
             b.levels = []
@@ -499,12 +503,29 @@ class ExtractionPipeline:
             st.drawing.issues.append({"stage": "validate", "severity": "warning",
                                       "message": f"ground coverage check skipped: {type(e).__name__}: {e}"})
             return []
+        # a floor lies against the building: a piece none of whose edge runs along a live wall,
+        # room or column (an area enclosed only by lines that were rejected as walls: a plot
+        # outline) is not floor
+        from shapely.strtree import STRtree
+        from ..geometry.geometric_utils import robust_intersection, robust_union, safe_buffer
+        cover = [g for g in cover if g is not None and not g.is_empty]
+        tree = STRtree(cover) if cover else None
+        min_share = float(gc.get("min_structure_share", 0.3))
         out = []
         for p in pieces:
             c = p.representative_point()
             lid = next((i for i, bx in plans if bx.contains(c)), None)
             if plans and lid is None:
                 continue
+            if min_share > 0:
+                try:
+                    near = [cover[int(k)] for k in tree.query(safe_buffer(p, 0.3))] if tree is not None else []
+                    on = robust_intersection(p.exterior, safe_buffer(robust_union(near), 0.3)).length if near else 0.0
+                    if on < min_share * p.exterior.length:
+                        st.logs.setdefault("ground_dropped", []).append(round(p.area, 1))
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
             out.append((p, lid))
         return out
 
@@ -527,17 +548,22 @@ class ExtractionPipeline:
         areas = None
         for lv in b.levels:
             lv.roof = None
-            if lv.kind != "floor_plan" or not pr.get("enabled", True) or not lv.outline \
+            if lv.kind != "floor_plan" or not pr.get("enabled", True) \
                     or not any(n in (lv.name or "").lower() for n in names):
                 continue
             try:
                 tx, ty = lv.translation
+                if lv not in plans:                       # nothing of the storey itself was recognised:
+                    lower = [x for x in plans if x.z < lv.z]      # its roof still stands on the storey below
+                    if not lower:
+                        continue
+                    plans.insert(plans.index(lower[-1]) + 1, lv)
                 k = plans.index(lv)
                 below, bl = None, lv
                 if k > 0:
                     bl = plans[k - 1]
                     below = robust_union([translate(p, bl.translation[0], bl.translation[1]) for p in bl.outline])
-                target = robust_union([translate(p, tx, ty) for p in lv.outline])
+                target = robust_union([translate(p, tx, ty) for p in lv.outline]) if lv.outline else below
                 over = float(pr.get("overhang_m", 0.0))
                 limit = safe_buffer(below, over, join_style=2) if below is not None and over > 0 else below
                 parts, source, info = None, None, {}

@@ -14,11 +14,12 @@
   ],
   "railing_height_m": 1.1,
   "ground": {
-    "_doc": "Floor coverage (topology/ground.py): parts of the building outline (closed over notches up to 2 x close_m) not covered by rooms, walls or columns get a ground slab and a validation warning.",
+    "_doc": "Floor coverage (topology/ground.py): parts of the building outline (closed over notches up to 2 x close_m) not covered by rooms, walls or columns get a ground slab and a validation warning. A piece counts only when at least min_structure_share of its edge runs along a live wall, room or column.",
     "enabled": true,
     "close_m": 2.0,
     "min_area_m2": 1.0,
-    "min_width_m": 0.4
+    "min_width_m": 0.4,
+    "min_structure_share": 0.3
   },
   "balcony_parapet_height_m": 0.5,
   "_doc_balcony": "Balcony walls (classification 'railing'): a low solid parapet of balcony_parapet_height_m with glass above it up to railing_height_m.",

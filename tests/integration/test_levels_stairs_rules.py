@@ -291,3 +291,38 @@ def test_roof_outline_is_read_from_the_roof_plan_hatches():
     assert len(parts) == 1 and len(parts[0].interiors) == 1                 # the open middle is kept
     assert parts[0].bounds == (1.0, 0.0, 20.0, 16.0)                         # cut to the storey below
     assert roof_for_level(areas, strokes, (0, 0, 20, 16), tol, box(200, 200, 220, 216))[0] is None
+
+
+def test_the_sheet_with_rooms_is_the_storey():
+    """Two sheets carry the title of one level: the floor plan, and a site / mass plan of that level
+    showing the plot and the levels (more FFL text, more lines). The storey is the one with rooms."""
+    from types import SimpleNamespace
+    from shapely.geometry import LineString
+    from architectural_converter.models.wall import Wall
+    from architectural_converter.topology.level_analysis import analyze_levels
+
+    def loop(prefix, x0, y0, w, h):
+        segs = [((x0, y0), (x0 + w, y0)), ((x0 + w, y0), (x0 + w, y0 + h)), ((x0 + w, y0 + h), (x0, y0 + h)), ((x0, y0 + h), (x0, y0))]
+        out = []
+        for k, (a, b) in enumerate(segs):
+            horiz = a[1] == b[1]
+            out.append(Wall(id=f"{prefix}{k}", kind="straight", u=(1.0, 0.0) if horiz else (0.0, 1.0),
+                            c=a[1] if horiz else -a[0], s0=min(a[0], b[0]) if horiz else min(a[1], b[1]),
+                            s1=max(a[0], b[0]) if horiz else max(a[1], b[1]), thickness=0.2))
+        return out
+    lab = lambda t, x, y: SimpleNamespace(text=t, position=(x, y), height=0.3, category="other")  # noqa: E731
+    ground, attic = loop("g", 0, 0, 20, 15), loop("a", 100, 0, 20, 15)
+    mass = loop("m", 200, 0, 30, 25) + loop("n", 205, 5, 20, 15)              # the plot and the building outline
+    labels = [lab("GROUND FLOOR PLAN", 10, -1), lab("705.00 F.F.L", 10, 7), lab("ATTIC FLOOR PLAN", 110, -1),
+              lab("ATTIC FLOOR PLAN", 215, -1), lab("718.80 F.F.L", 215, 12), lab("718.80 F.F.L", 212, 8)]
+    strokes = [SimpleNamespace(p0=w.axis.coords[0], p1=w.axis.coords[-1], line=lambda w=w: LineString(w.axis.coords))
+               for w in ground + attic + mass]
+    tol = SimpleNamespace(snap=0.01)
+    cfg = PipelineConfig()
+    structural = {w.id for w in ground + attic}                               # the mass plan has no rooms
+    levels, _, log = analyze_levels(ground + attic + mass, labels, strokes, tol, cfg, structural=structural)
+    kind = {lv.wall_ids[0][0]: lv.kind for lv in levels}
+    assert log["stacked"] and kind["g"] == "floor_plan" and kind["a"] == "floor_plan" and kind["m"] == "duplicate", (kind, log)
+    # without that knowledge the annotated, larger sheet wins (the behaviour before)
+    levels, _, _ = analyze_levels(ground + attic + mass, labels, strokes, tol, cfg)
+    assert {lv.wall_ids[0][0]: lv.kind for lv in levels}["m"] == "floor_plan"
