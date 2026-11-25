@@ -1,18 +1,18 @@
 """Room classification from labels first, geometry second."""
 from __future__ import annotations
 
-from ..detectors.text_detector import room_type_of
+from ..topology.label_rules import label_types, room_label_type
 from ..geometry.geometric_utils import mrr_dims
 
 
 def classify_rooms(rooms, openings_by_id, cfg):
     cc = cfg["classification"]
     for r in rooms:
-        rtype = None
-        for t in r.label_texts:
-            rtype = room_type_of(t, cc["room_keywords"])
-            if rtype:
-                break
+        rtype = room_label_type(r, cc["room_keywords"])
+        if len(set(label_types(r, cc["room_keywords"]))) > 1:
+            n = "several room names in one room: typed by an indoor name, a wall between them may be missing"
+            if n not in r.notes:
+                r.notes.append(n)
         if rtype:
             r.classification = rtype
             continue

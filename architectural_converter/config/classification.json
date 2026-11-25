@@ -133,10 +133,24 @@
       "room",
       "suite",
       "guest"
+    ],
+    "balcony": [
+      "balcony",
+      "balcon",
+      "balkon",
+      "balcone",
+      "terrace",
+      "terrasse",
+      "terraza",
+      "terrazza",
+      "loggia",
+      "veranda",
+      "patio",
+      "deck"
     ]
   },
   "area_text_patterns": [
-    "([0-9]+(?:[.,][0-9]+)?)\\s*(?:m2|m\u00b2|sqm|sq\\.?\\s*m)"
+    "([0-9]+(?:[.,][0-9]+)?)\\s*(?:m2|m²|sqm|sq\\.?\\s*m)"
   ],
   "area_match_tol": 0.12,
   "plausibility": {
@@ -177,5 +191,13 @@
       "entree",
       "flur"
     ]
+  },
+  "balcony": {
+    "_doc": "Balcony / terrace detection (classification/balcony.py). Thickness is relative to the drawing's own exterior walls.",
+    "enabled": true,
+    "railing_max_rel_thickness": 0.6,
+    "min_outline_share": 0.25,
+    "min_railing_share": 0.6,
+    "max_area_m2": 40.0
   }
 }

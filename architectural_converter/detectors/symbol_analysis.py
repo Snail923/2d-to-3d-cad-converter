@@ -48,25 +48,45 @@ class LineTable:
             self.L = np.zeros(0)
 
 
-def leaf_line_for(arc_g, lines, tol, rel):
-    """Line from the arc centre with length ~ radius ending at one arc endpoint.
+def leaf_candidates(arc_g, lines, tol, rel):
+    """Radial lines that can be the drawn door leaf of a swing arc.
 
-    ``lines`` is a list of line GeoEntities or a prepared ``LineTable`` (much faster when
-    called for many arcs)."""
+    A leaf starts at the hinge (arc centre), has the length of the radius and its tip lands on
+    one of the two arc end points. Door symbols also hold frame / threshold / jamb lines of a
+    similar length that start near the hinge, so every candidate is returned with the end point
+    it reaches (0 = arc start, 1 = arc end) and its *tip error* (distance from the tip to that
+    end point): the leaf is the line whose tip meets the arc, not the last line found.
+
+    Returns ``[(tip_error, endpoint, line, tip)]`` sorted by error."""
     table = lines if isinstance(lines, LineTable) else LineTable(lines)
     if not table.lines:
-        return None
+        return []
     c = np.array(arc_g.data["center"][:2], dtype=float)
     r = arc_g.data["radius"]
+    ends = np.array([[c[0] + r * math.cos(arc_g.data["start"]), c[1] + r * math.sin(arc_g.data["start"])],
+                     [c[0] + r * math.cos(arc_g.data["end"]), c[1] + r * math.sin(arc_g.data["end"])]])
     near = max(4 * tol, 0.03 * r)
+    tip_near = max(4 * tol, 0.06 * r)
     ok_len = np.abs(table.L - r) <= rel * r
-    best = None
+    out = []
     for start, end in ((table.a, table.b), (table.b, table.a)):
         hit = np.nonzero(ok_len & (np.hypot(*(start - c).T) <= near))[0]
-        if len(hit):
-            k = int(hit[-1])
-            best = (table.lines[k], end[k].copy())
-    return best
+        for k in hit:
+            tip = end[k]
+            d = np.hypot(*(ends - tip).T)
+            e = int(np.argmin(d))
+            if d[e] <= tip_near:
+                out.append((float(d[e]), e, table.lines[int(k)], tip.copy()))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
+
+
+def leaf_line_for(arc_g, lines, tol, rel):
+    """Best drawn leaf of a swing arc: ``(line, tip)`` or None (see ``leaf_candidates``)."""
+    cands = leaf_candidates(arc_g, lines, tol, rel)
+    if not cands:
+        return None
+    return cands[0][2], cands[0][3]
 
 
 def analyze_symbols(drawing, cfg, tol) -> dict[str, dict]:
@@ -87,13 +107,23 @@ def analyze_symbols(drawing, cfg, tol) -> dict[str, dict]:
         scores = {k: 0.0 for k in ("door", "window", "column", "furniture", "assembly")}
         name_sc = category_scores(ref.name, sem)
         lay_sc = category_scores(ref.layer, sem)
+        semantic = {}
         for k in ("door", "window", "column", "furniture"):
-            scores[k] += 0.6 * name_sc.get(k, 0.0) + 0.3 * lay_sc.get(k, 0.0)
+            semantic[k] = 0.6 * name_sc.get(k, 0.0) + 0.3 * lay_sc.get(k, 0.0)
+            scores[k] += semantic[k]
         if name_sc.get("wall", 0) > 0:
             scores["assembly"] += 0.4
-        scores["door"] += sig["door_score"]
-        scores["window"] += sig["window_score"]
-        scores["column"] += sig["column_score"]
+        # the geometric signatures are generic (two equal parallel lines, a compact closed
+        # shape...) and furniture matches them too: wardrobes, counters, TV units, bath tubs.
+        # When the block's own name or layer says furniture / fixture and nothing says
+        # door / window / column, geometry alone may not turn it into a building element.
+        furn_sem = max(name_sc.get("furniture", 0.0), lay_sc.get("furniture", 0.0))
+        disc = sym.get("furniture_semantic_discount", 0.3)
+        for k, key in (("door", "door_score"), ("window", "window_score"), ("column", "column_score")):
+            g = sig[key]
+            if furn_sem >= 0.5 and max(name_sc.get(k, 0.0), lay_sc.get(k, 0.0)) < 0.5:
+                g *= disc
+            scores[k] += g
         ext = sig["extent_length"]
         if ext >= sym["assembly_min_extent_m"] and sig["n_lines"] >= 4:
             scores["assembly"] += 0.5 + (0.1 if sig["n_nested"] else 0.0)
@@ -104,6 +134,7 @@ def analyze_symbols(drawing, cfg, tol) -> dict[str, dict]:
             "symbol" if ext <= sym["max_symbol_extent_m"] else "assembly")
         ref.role = role
         ref.role_scores = {k: round(v, 3) for k, v in scores.items()}
+        ref.semantic_scores = {k: round(v, 3) for k, v in semantic.items()}
         roles[ref.id] = role
     # effective role of every primitive: innermost non-assembly insert wins
     for g in drawing.entities:
@@ -164,6 +195,17 @@ def signature(ents, det, tol) -> dict:
             equal = [L for L in best if abs(L - med) <= det["window"]["length_match_tol"] * med]
             if len(equal) >= 2 and sig["extent_width"] <= tol.thickness_max * 1.3:
                 sig["window_score"] = 0.5 + (0.1 if len(equal) >= 3 else 0.0)
+                # purity: a window symbol is frame + glass lines. A block made largely of
+                # curves (sinks, cushions, hangers, appliances) or whose parallel lines do not
+                # span the symbol from jamb to jamb is furniture drawn with parallel edges.
+                n_curves = sig["n_arcs"] + sig["n_circles"]
+                curve_share = n_curves / max(1, n_curves + sig["n_lines"])
+                span = med / max(sig["extent_length"], 1e-9)
+                wcfg = det["window"]
+                if curve_share > wcfg.get("symbol_max_curve_share", 0.25) or span < wcfg.get("symbol_min_span", 0.8):
+                    sig["window_score"] *= 0.5
+                sig["window_curve_share"] = round(curve_share, 3)
+                sig["window_span"] = round(span, 3)
     # column: compact, small, closed / filled
     clo, chi = det["column"]["size_m"]
     W, L = sig["extent_width"], sig["extent_length"]

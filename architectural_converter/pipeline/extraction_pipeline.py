@@ -213,7 +213,8 @@ class ExtractionPipeline:
         st.logs["resolve"] = dict(st.ctx.stats.get("resolver", {}), manual_overrides=n,
                                   manual_walls=len(corr.get("added_walls", [])))
         # stair flights: their tread lines must not survive as wall candidates
-        from ..detectors.stair_detector import detect_stairs, veto_tread_walls
+        from ..detectors.stair_detector import (assemble_flights, detect_stairs, veto_stair_outline_walls,
+                                                veto_tread_walls)
         if "stair_detector" in self.cfg["runtime"].get("disabled_detectors", []):
             st.stairs, slog = [], {"skipped": "disabled"}
         else:
@@ -223,6 +224,10 @@ class ExtractionPipeline:
                 st.stairs, slog = detect_stairs(st.ctx, self.cfg, ids, st.ctx.labels)
                 apply_status_overrides(st.stairs, corr)
                 slog["walls_vetoed"] = veto_tread_walls(st.stairs, walls, self.cfg)
+                raw = st.drawing.raw_entities
+                slog["outline_walls_vetoed"] = veto_stair_outline_walls(
+                    st.stairs, walls, self.cfg, lambda r: raw[r].layer if r in raw else None, st.ctx.layer_score)
+                slog["assembly"] = assemble_flights(st.stairs, walls, self.cfg, st.ctx.tol)
             except Exception as e:  # noqa: BLE001  (an optional detector must never stop the pipeline)
                 st.stairs, slog = [], {"error": str(e)}
                 st.drawing.issues.append({"stage": "resolve", "severity": "warning",
@@ -242,12 +247,27 @@ class ExtractionPipeline:
         ow = self.cfg["detection"]["weights"]
         th = self.cfg["detection"]["status_thresholds"]
         for o in generic:
+            if o.width < max(st.ctx.tol.snap * 2, 0.05) and o.manual_status is None:
+                o.veto("degenerate gap (no width)")
+                continue
             o.score({**ow["opening"], "manual": 10.0}, th)
-            if o.manual_status is None:
+            if o.manual_status is None and o.status != Status.REJECTED:
                 o.confidence = min(o.confidence, self.cfg["reconstruction"]["unidentified_opening_confidence"])
                 o.status = Status.NEEDS_REVIEW if o.confidence >= th["review"] else Status.REJECTED
         st._generic = generic
         st.logs["reconstruct"] = log
+        # manual geometry edits (cut / move walls, add / move openings) on the reconstructed walls
+        if any(corr.get(k) for k in ("wall_edits", "wall_cuts", "added_openings", "opening_edits")):
+            from .corrections import apply_geometry_edits
+            try:
+                st.logs["reconstruct"]["manual_edits"] = apply_geometry_edits(st.walls, st.doors, st.windows, generic, corr)
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "reconstruct", "severity": "warning",
+                                          "message": f"manual geometry edits skipped: {type(e).__name__}: {e}"})
+            # wall pieces and openings made by the edits can be deleted / accepted like any other
+            ov = corr.get("status_overrides", {})
+            apply_status_overrides([e for e in st.walls + st.doors + st.windows + generic
+                                    if e.id in ov and e.status.value != ov[e.id]], corr)
 
     def _stage_topology(self, st):
         cfg = self.cfg
@@ -259,12 +279,30 @@ class ExtractionPipeline:
         th = cfg["detection"]["status_thresholds"]
         gate = cfg["detection"].get("gates", {}).get("wall")
         for w in live:
+            if w.detection_methods & {"door_implied", "label_implied"} and w.manual_status is None:
+                continue                      # added by the door / room-name rules: keeps its own confidence
             w.score(ww, th, gate)
         for kind, coll in (("door", st.doors), ("window", st.windows)):
             for o in coll:
                 if o.host_wall is None and o.manual_status is None:
                     o.add_evidence("host_wall", 0.0)
                 o.score(cfg["detection"]["weights"][kind], th)
+        openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
+        # a door is always in a wall: complete the wall on the line of every door
+        from ..topology.door_rules import complete_door_walls, promote_door_rooms
+        try:
+            dlog = complete_door_walls(walls, st.doors, tol, cfg, st.ctx.ids, st.windows)
+            for o in st.windows:                       # hosted by the rule: score again with its host
+                if o.host_wall and any("hosted by the door / window rule" in n for n in o.notes):
+                    o.score(cfg["detection"]["weights"]["window"], th)
+            openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
+        except Exception as e:  # noqa: BLE001  (an optional rule must never stop the pipeline)
+            dlog = {"error": f"{type(e).__name__}: {e}"}
+            st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                      "message": f"door rules (door line) skipped: {dlog['error']}"})
+        # walls added by the door / room-name rules can be deleted / accepted like any other
+        apply_status_overrides([w for w in walls if w.manual_status is None
+                                and w.detection_methods & {"door_implied", "label_implied"}], st.corrections)
         openings = [o for o in st.doors + st.windows + st._generic if o.status != Status.REJECTED]
         live = [w for w in walls if w.status != Status.REJECTED]
         # walls whose openings were all rejected stay closed; rejected openings detach from hosts
@@ -287,6 +325,10 @@ class ExtractionPipeline:
         apply_status_overrides(rooms, st.corrections)
         live_rooms = [r for r in rooms if r.status != Status.REJECTED]
         G_rooms = relate_rooms(live_rooms, live, openings, tol)
+        from ..topology.door_rules import drop_unused
+        if "error" not in dlog:
+            dlog["unused_rejected"] = drop_unused(walls, live_rooms)
+        live = [w for w in walls if w.status != Status.REJECTED]
         if cfg["runtime"].get("safe_mode"):
             hyps, hrooms, hlog = [], [], {"skipped": "safe mode"}
             st.drawing.issues.append({"stage": "topology", "severity": "warning",
@@ -294,6 +336,31 @@ class ExtractionPipeline:
         else:
             self._report("Step 7/10: missing-room recovery")
             hyps, hrooms, hlog = recover_missing_rooms(walls, st.columns, live_rooms, st.ctx.labels, tol, cfg, st.ctx.ids, rd)
+            if not getattr(st, "_door_room_pass", False):
+                try:
+                    promoted = promote_door_rooms(hyps, hrooms, openings, tol, cfg, st.ctx.ids, live_rooms, walls)
+                except Exception as e:  # noqa: BLE001
+                    promoted = []
+                    st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                              "message": f"door rules (rooms with a door) skipped: {type(e).__name__}: {e}"})
+                try:
+                    from ..topology.label_rules import promote_label_rooms
+                    named, nlog = promote_label_rooms(hyps, hrooms, tol, cfg, st.ctx.ids, live_rooms, walls)
+                    promoted = promoted + named
+                    st.logs["label_rules_first_pass"] = nlog
+                except Exception as e:  # noqa: BLE001
+                    st.drawing.issues.append({"stage": "topology", "severity": "warning",
+                                              "message": f"room-name rules skipped: {type(e).__name__}: {e}"})
+                if promoted:
+                    # a room with a door needs all its walls: the closing hypotheses become walls,
+                    # and rooms are detected again with them
+                    st.walls = walls + promoted
+                    st._door_room_pass = True
+                    st.logs["door_rules_first_pass"] = {"door_line": dlog, "room_walls_promoted": [h.id for h in promoted]}
+                    try:
+                        return self._stage_topology(st)
+                    finally:
+                        st._door_room_pass = False
         G_axis = build_axis_graph(live, tol)
         max_t = max([w.thickness or 0.0 for w in live] + [tol.snap * 4])  # shorter dangling pieces are junction overshoots
         b = Building()
@@ -309,10 +376,15 @@ class ExtractionPipeline:
         self._report("Step 7/10: floor levels")
         self._assign_levels(st, b, tol)
         from ..detectors.stair_detector import assign_rise
-        assign_rise(b.stairs.values(), {lv.id: lv for lv in b.levels}, self.cfg)
+        p2 = self.cfg["phase2"]
+        assign_rise(b.stairs.values(), {lv.id: lv for lv in b.levels}, self.cfg,
+                    p2["wall_height_m"] + p2["slab_thickness_m"])
         st.building = b
         st.solid = solid
-        st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "wall_graph_components": _ncomp(G_walls),
+        st.logs["topology"] = {"rooms": rlog, "recovery": hlog, "door_rules": dlog,
+                               "room_names": st.logs.get("label_rules_first_pass", {}),
+                               "door_room_walls": st.logs.get("door_rules_first_pass", {}).get("room_walls_promoted", []),
+                               "wall_graph_components": _ncomp(G_walls),
                                "axis_graph": {"nodes": G_axis.number_of_nodes(), "edges": G_axis.number_of_edges(),
                                               "dangling_nodes": sum(1 for n in G_axis.nodes if G_axis.degree(n) == 1
                                                                    and next(iter(G_axis.edges(n, data=True)))[2]["length"] > max_t)}}
@@ -320,7 +392,11 @@ class ExtractionPipeline:
     def _assign_levels(self, st, b, tol):
         from shapely.geometry import Point, box as _box
         from ..topology.level_analysis import analyze_levels
-        levels, wall_level, llog = analyze_levels(list(b.walls.values()), st.ctx.labels, st.ctx.strokes, tol, self.cfg)
+        live_e = lambda e: e.status != Status.REJECTED  # noqa: E731
+        structural = {wid for r in b.rooms.values() if live_e(r) and not r.is_hypothesis for wid in r.bounding_walls}
+        structural |= {o.host_wall for o in b.openings.values() if live_e(o) and o.host_wall and o.type in ("door", "window")}
+        levels, wall_level, llog = analyze_levels(list(b.walls.values()), st.ctx.labels, st.ctx.strokes, tol, self.cfg,
+                                                  structural=structural)
         st.logs["levels"] = llog
         if not llog.get("stacked"):
             b.levels = []
@@ -371,13 +447,16 @@ class ExtractionPipeline:
         for h in b.hypotheses.values():
             h.classification = "hypothesis"
         from ..classification.access_solver import solve_access
+        from ..classification.balcony import detect_balconies
         from ..classification.plausibility import apply_plausibility
+        balc = detect_balconies(b, self.cfg, tol, st.drawing)
         from .corrections import apply_opening_type_overrides
         locked = apply_opening_type_overrides(list(b.openings.values()), st.corrections)
-        plaus = apply_plausibility(b, self.cfg, locked)
+        plaus = apply_plausibility(b, self.cfg, locked, tol)
         access = solve_access(b, self.cfg, locked)
         classify_openings(list(b.openings.values()), walls)
-        st.logs["classify"] = {"partition_threshold_m": limit, "plausibility": plaus, "access": access}
+        st.logs["classify"] = {"partition_threshold_m": limit, "balconies": balc, "plausibility": plaus,
+                               "access": access}
 
     def _stage_validate(self, st):
         b = st.building
@@ -392,7 +471,278 @@ class ExtractionPipeline:
             rep.add("room", "missing_boundary_hypothesis", "warning", h, (c.x, c.y),
                     f"Proposed missing wall {h.id}: {h.status_reason}.",
                     "Accept the hypothesis if the wall exists, otherwise ignore it.", h.confidence)
+        self._check_ground(st, rep)
         st.report = rep
+
+    def ground_pieces(self, st):
+        """[(polygon, level id)] of areas inside the building (outline closed over small notches)
+        without a room floor. Computed once here; Phase 2 only extrudes them (model building.ground)."""
+        from shapely.geometry import box as _box
+        from ..topology.ground import unassigned_floor
+        gc = self.cfg["phase2"].get("ground", {})
+        b = st.building
+        if not gc.get("enabled", True) or b is None or getattr(b, "footprint", None) is None:
+            return []
+        from ..geometry.geometric_utils import polygons_of
+        live = lambda e: e.status != Status.REJECTED  # noqa: E731
+        plans = [(lv.id, _box(*lv.bbox)) for lv in b.levels if lv.kind == "floor_plan"] if b.levels else []
+
+        def on_plans(g):
+            c = g.representative_point()
+            return not plans or any(bx.contains(c) for _, bx in plans)
+        # only the floor-plan views take part (elevations, sections, duplicates have no floors)
+        cover = [r.polygon for r in b.rooms.values() if live(r) and r.polygon is not None]
+        cover += [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis]
+        cover += [c.polygon for c in b.columns.values() if live(c) and c.polygon is not None]
+        outline = [g for g in polygons_of(b.footprint) if on_plans(g)]
+        try:
+            pieces = unassigned_floor(outline, [g for g in cover if g is not None and on_plans(g)],
+                                      gc.get("close_m", 2.0), gc.get("min_area_m2", 1.0), gc.get("min_width_m", 0.4),
+                                      gc.get("wide_close_m", ()), gc.get("min_enclosure", 0.6))
+        except Exception as e:  # noqa: BLE001  (an optional check must never stop the pipeline)
+            st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                      "message": f"ground coverage check skipped: {type(e).__name__}: {e}"})
+            return []
+        # a floor lies against the building: a piece none of whose edge runs along a live wall,
+        # room or column (an area enclosed only by lines that were rejected as walls: a plot
+        # outline) is not floor
+        from shapely.strtree import STRtree
+        from ..geometry.geometric_utils import robust_intersection, robust_union, safe_buffer
+        cover = [g for g in cover if g is not None and not g.is_empty]
+        tree = STRtree(cover) if cover else None
+        min_share = float(gc.get("min_structure_share", 0.3))
+        out = []
+        for p in pieces:
+            c = p.representative_point()
+            lid = next((i for i, bx in plans if bx.contains(c)), None)
+            if plans and lid is None:
+                continue
+            if min_share > 0:
+                try:
+                    near = [cover[int(k)] for k in tree.query(safe_buffer(p, 0.3))] if tree is not None else []
+                    on = robust_intersection(p.exterior, safe_buffer(robust_union(near), 0.3)).length if near else 0.0
+                    if on < min_share * p.exterior.length:
+                        st.logs.setdefault("ground_dropped", []).append(round(p.area, 1))
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append((p, lid))
+        return out
+
+    def _attic_roofs(self, st, lc, log):
+        """Footprint of the pitched roof of attic / roof storeys.
+
+        1. As drawn: the roof plan's tile hatches (topology/roof_plan.py), aligned onto the storey,
+           with the untiled middle (deck, core) as a hole.
+        2. Else the storey's walled part (walls that are not railings, rooms that are not terraces).
+        A roof is not wider than the building: both are cut to the outline of the storey below."""
+        from shapely.affinity import translate
+        from ..geometry.geometric_utils import polygons_of, robust_intersection, robust_union, safe_buffer
+        from shapely.geometry import Polygon as _Polygon
+        from ..topology.roof_plan import regularize_roof, roof_areas, roof_for_level
+        pr = self.cfg["phase2"].get("pitched_roof", {})
+        names = [n.lower() for n in lc.get("no_roof_names", [])]
+        b = st.building
+        plans = sorted((lv for lv in b.levels if lv.kind == "floor_plan" and lv.outline), key=lambda lv: lv.z)
+        min_area = pr.get("min_area_m2", 10.0)
+        areas = None
+        for lv in b.levels:
+            lv.roof = None
+            if lv.kind != "floor_plan" or not pr.get("enabled", True) \
+                    or not any(n in (lv.name or "").lower() for n in names):
+                continue
+            try:
+                tx, ty = lv.translation
+                if lv not in plans:                       # nothing of the storey itself was recognised:
+                    lower = [x for x in plans if x.z < lv.z]      # its roof still stands on the storey below
+                    if not lower:
+                        continue
+                    plans.insert(plans.index(lower[-1]) + 1, lv)
+                k = plans.index(lv)
+                below, bl = None, lv
+                if k > 0:
+                    bl = plans[k - 1]
+                    below = robust_union([translate(p, bl.translation[0], bl.translation[1]) for p in bl.outline])
+                target = robust_union([translate(p, tx, ty) for p in lv.outline]) if lv.outline else below
+                over = float(pr.get("overhang_m", 0.0))
+                limit = safe_buffer(below, over, join_style=2) if below is not None and over > 0 else below
+                live = lambda e: e.status != Status.REJECTED and e.level == lv.id  # noqa: E731
+                parts, source, info = None, None, {}
+                if pr.get("from_roof_plan", True):
+                    if areas is None:
+                        areas = roof_areas(st.ctx.hatch_regions, pr.get("hatch_patterns", []), min_area)
+                    hull = target.convex_hull if below is None else robust_union([target, below]).convex_hull
+                    # the roof sheet is aligned onto the sheet of the storey below, which is already placed
+                    parts, info = roof_for_level(areas, st.ctx.strokes, bl.bbox, st.ctx.tol, hull, limit,
+                                                 float(pr.get("min_overlap", 0.6)), min_area, tuple(bl.translation))
+                    source = "roof plan" if parts else None
+                if not parts:
+                    geoms = [w.polygon(0.05) for w in b.walls.values() if live(w) and not w.is_hypothesis
+                             and w.classification != "railing"]
+                    geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis
+                              and r.classification != "balcony"]
+                    geoms = [translate(g, tx, ty) for g in geoms if g is not None and not g.is_empty]
+                    body, source = target, "storey outline"
+                    if geoms:
+                        closed = safe_buffer(safe_buffer(robust_union(geoms), 2.0, join_style=2), -2.0, join_style=2)
+                        walled = [_Polygon(p.exterior) for p in polygons_of(closed) if p.area >= min_area]
+                        if walled and sum(p.area for p in walled) >= 0.3 * target.area:
+                            body, source = robust_union(walled), "walled part of the storey"
+                    if over > 0:
+                        body = safe_buffer(body, over, join_style=2)
+                    if limit is not None:
+                        body = robust_intersection(body, limit)
+                    parts = [_Polygon(p.exterior) for p in polygons_of(body) if p.area >= min_area]
+                reg_info, abuts, dormers = None, [], []
+                reg = pr.get("regularize", {})
+                if parts and reg.get("enabled", True):
+                    # a regular outline: dormers and label boxes closed, a core rising through the roof
+                    # made part of it, sides squared to the building (topology/roof_plan.py)
+                    rooms = [translate(r.polygon, tx, ty) for r in b.rooms.values() if live(r) and not r.is_hypothesis
+                             and r.classification not in ("balcony", "terrace") and r.polygon is not None]
+                    walls = [translate(w.polygon(0.05), tx, ty) for w in b.walls.values() if live(w)
+                             and not w.is_hypothesis and w.classification != "railing"]
+                    rr = regularize_roof(robust_union(parts), rooms, source == "roof plan"
+                                         and pr.get("dormers", {}).get("enabled", True),
+                                         {k: v for k, v in reg.items() if not k.startswith("_") and k != "enabled"},
+                                         walls=[g for g in walls if g is not None and not g.is_empty])
+                    if rr and rr["parts"]:
+                        parts = [p for p in rr["parts"] if p.area >= min_area] or parts
+                        abuts, dormers, reg_info = rr["abutments"], rr["dormers"], rr["info"]
+                r5 = lambda ring: [[round(float(x - tx), 4), round(float(y - ty), 4)] for x, y in ring.coords]  # noqa: E731
+                rings = []
+                for p in parts or []:
+                    if not reg_info:
+                        q = p.simplify(0.03)
+                        p = q if q.geom_type == "Polygon" and q.is_valid and not q.is_empty else p
+                    grown = p.buffer(1e-3)
+                    entry = {"exterior": r5(p.exterior), "holes": [r5(h) for h in p.interiors if _Polygon(h).area >= 0.5]}
+                    mine = [a for a in abuts if grown.contains(a.representative_point())]
+                    if mine:
+                        entry["abutments"] = [r5(a.exterior) for a in mine]
+                    mine = [d for d in dormers if grown.contains(d["outline"].representative_point())]
+                    if mine:
+                        entry["dormers"] = [{"outline": r5(d["outline"].exterior),
+                                             "mouth": [[round(float(x - tx), 4), round(float(y - ty), 4)] for x, y in d["mouth"]],
+                                             "tip": [round(float(d["tip"][0] - tx), 4), round(float(d["tip"][1] - ty), 4)],
+                                             "width": round(d["width"], 3), "depth": round(d["depth"], 3)} for d in mine]
+                    rings.append(entry)
+                if rings:
+                    lv.roof = {"kind": "pitched", "source": source, "footprint": rings}
+                    if reg_info:
+                        lv.roof["regularization"] = reg_info
+                    log.setdefault(lv.id, {})["roof"] = dict(
+                        info, kind="pitched", source=source, holes=sum(len(r["holes"]) for r in rings),
+                        regularization=reg_info,
+                        area_m2=round(sum(_Polygon(r["exterior"], r["holes"]).area for r in rings), 2))
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"roof of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})
+
+    def _manual_floors(self, st, pieces):
+        """added_floors / floor_cuts of the corrections: [(polygon, level)] with them applied; rooms
+        touched by a cut get ``floor_parts`` (their floor without the cut)."""
+        from shapely.geometry import box as _box
+        from .corrections import floor_polygons
+        from ..geometry.geometric_utils import hole_free, robust_difference, robust_union
+        add, cuts = floor_polygons(st.corrections, "added_floors"), floor_polygons(st.corrections, "floor_cuts")
+        b = st.building
+        for r in b.rooms.values():
+            r.__dict__.pop("floor_parts", None)
+        if not add and not cuts:
+            return pieces
+        plans = [(lv.id, _box(*lv.bbox)) for lv in b.levels if lv.kind == "floor_plan"] if b.levels else []
+        level = lambda g: next((i for i, bx in plans if bx.contains(g.representative_point())), None)  # noqa: E731
+        pieces = list(pieces) + [(p, level(p)) for p in add]
+        if cuts:
+            cut = robust_union(cuts)
+            pieces = [(q, lid) for p, lid in pieces for q in hole_free(robust_difference(p, cut)) if q.area > 0.01]
+            for r in b.rooms.values():
+                if r.polygon is not None and r.status != Status.REJECTED and r.polygon.intersects(cut):
+                    r.__dict__["floor_parts"] = [q for q in hole_free(robust_difference(r.polygon, cut)) if q.area > 0.01]
+        st._floor_cut = robust_union(cuts) if cuts else None
+        return pieces
+
+    def _check_ground(self, st, rep):
+        pieces = self.ground_pieces(st)
+        st._floor_cut = None
+        try:
+            pieces = self._manual_floors(st, pieces)
+        except Exception as e:  # noqa: BLE001
+            st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                      "message": f"manual floor edits skipped: {type(e).__name__}: {e}"})
+        st.ground = pieces
+        for p, _ in pieces:
+            c = p.representative_point()
+            rep.add("room", "floor_without_room", "warning", None, (c.x, c.y),
+                    f"{p.area:.1f} m² inside the building is not part of any room (no floor from a room): "
+                    "a wall may be missing, or the space was not recognised as a room.",
+                    "Add the missing wall or draw the room; the 3D model fills it with a ground slab.", 0.6, set())
+        st.logs["ground"] = {"unassigned_floor_pieces": len(pieces), "area_m2": round(sum(p.area for p, _ in pieces), 2)}
+        self._level_outlines(st, pieces)
+
+    def _level_outlines(self, st, pieces):
+        """Closed outline of every floor-plan level (stacked drawings): its base and roof slab."""
+        b = st.building
+        lc = self.cfg["phase2"].get("level_slabs", {})
+        if b is None or not b.levels or not lc.get("enabled", True):
+            return
+        from ..topology.level_slabs import level_outline
+        gc = self.cfg["phase2"].get("ground", {})
+        live = lambda e: e.status != Status.REJECTED  # noqa: E731
+        log = {}
+        bound = {wid for r in b.rooms.values() if live(r) and not r.is_hypothesis for wid in r.bounding_walls}
+        hosts = {o.host_wall for o in b.openings.values() if live(o) and o.host_wall}
+        for lv in b.levels:
+            if lv.kind != "floor_plan":
+                continue
+            walls = [w for w in b.walls.values() if live(w) and not w.is_hypothesis and w.level == lv.id]
+            # the structure of the storey: walls that bound a room or carry an opening (a free-standing
+            # group kept for review does not make the storey bigger)
+            used = [w for w in walls if w.id in bound or w.id in hosts]
+            # (the vertices of all its walls stay the reference: when the structure covers less than
+            # half of what they span, the storey did not close and its wall vertices are connected)
+            geoms = [w.polygon(0.05) for w in (used or walls)]
+            geoms += [r.polygon for r in b.rooms.values() if live(r) and not r.is_hypothesis and r.level == lv.id]
+            geoms += [c.polygon for c in b.columns.values() if live(c) and c.level == lv.id]
+            geoms += [p for p, lid in pieces if lid == lv.id]
+            pts = [xy for w in walls for xy in w.axis.coords]
+            try:
+                lv.outline, lv.outline_source = level_outline(
+                    geoms, pts, gc.get("close_m", 2.0), gc.get("wide_close_m", ()), gc.get("min_enclosure", 0.6),
+                    lc.get("min_hull_share", 0.5), lc.get("hull_ratio", 0.25), gc.get("min_area_m2", 1.0))
+            except Exception as e:  # noqa: BLE001  (an optional step must never stop the pipeline)
+                lv.outline, lv.outline_source = [], None
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"outline of level {lv.name or lv.id} skipped: {type(e).__name__}: {e}"})
+            log[lv.id] = {"source": lv.outline_source, "area_m2": round(sum(p.area for p in lv.outline), 2)}
+        # the storeys repeat: cut what one sheet shows far outside all the others
+        plans = sorted((lv for lv in b.levels if lv.kind == "floor_plan" and lv.outline), key=lambda lv: lv.z)
+        over = lc.get("max_overhang_m", 3.0)
+        if over is not None and len(plans) > 1:
+            try:
+                from ..topology.level_slabs import limit_overhang
+                kept, cut = limit_overhang([(lv.outline, tuple(lv.translation)) for lv in plans], float(over),
+                                           gc.get("min_area_m2", 1.0))
+                for lv, polys, c in zip(plans, kept, cut):
+                    if c > 0.5 and polys:
+                        lv.outline = polys
+                        log[lv.id]["cut_beyond_other_storeys_m2"] = c
+                        log[lv.id]["area_m2"] = round(sum(p.area for p in polys), 2)
+            except Exception as e:  # noqa: BLE001
+                st.drawing.issues.append({"stage": "validate", "severity": "warning",
+                                          "message": f"overhang limit of the level outlines skipped: {type(e).__name__}: {e}"})
+        self._attic_roofs(st, lc, log)
+        cut = getattr(st, "_floor_cut", None)
+        if cut is not None:                     # manual floor cuts go through the storey slabs too (stair voids)
+            from ..geometry.geometric_utils import hole_free, robust_difference
+            for lv in b.levels:
+                if lv.kind == "floor_plan" and lv.outline:
+                    try:
+                        lv.outline = [q for p in lv.outline for q in hole_free(robust_difference(p, cut)) if q.area > 0.01]
+                    except Exception:  # noqa: BLE001
+                        pass
+        st.logs["level_outlines"] = log
 
     def _stage_export(self, st):
         from .database_exporter import build_model

@@ -13,6 +13,7 @@ from ..classification.candidate_resolver import same_band
 from ..geometry.geometric_utils import dot, bbox_pad
 from ..models.base_entity import Status
 from .graph_builder import build_wall_graph
+from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 
 def topology_evidence(walls, columns, tol):
@@ -24,7 +25,7 @@ def topology_evidence(walls, columns, tol):
     largest = max(size.values()) if size else 1
     bodies = [(w, w.polygon(tol.snap * 2)) for w in walls]
     bodies = [(w, p) for w, p in bodies if p is not None]
-    bodies += [(c, c.polygon.buffer(tol.snap * 2)) for c in columns
+    bodies += [(c, _sbuf(c.polygon, tol.snap * 2)) for c in columns
                if c.polygon is not None and c.status != Status.REJECTED]
     tree = STRtree([p for _, p in bodies]) if bodies else None
     for w in walls:

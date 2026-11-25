@@ -16,6 +16,18 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 | Phase 2 | reference 3D reconstruction (Shapely + Trimesh) from the exported model only → GLB |
 | Review UI | 2D overlay with layer toggles, evidence and source-entity inspection, accept/reject, add wall, connect endpoints, draw room, re-run, 3D viewer, exports |
 
+## Two approaches (kept separate for comparison)
+
+| | package | extraction | status |
+|---|---|---|---|
+| **Approach 1** | `architectural_converter/` | geometry, graph topology and rules only (this README) | complete |
+| **Approach 2** | `sympoint_converter/` | the learned model [SymPointV2](https://github.com/nicehuster/SymPointV2) labels every DXF line (wall, door types, window, curtain wall, stairs, furniture, ...); walls, doors, windows, columns and stairs are built from the labels, then approach 1's reconstruction, rooms, classification, validation, export and 3D run unchanged | complete; `python -m sympoint_converter compare <dxf>` runs both side by side (the GPU service starts by itself) |
+
+Approach 2 reuses approach 1's DXF front end and build stages; approach 1 never imports approach 2.
+In the web app, choose **Method** in the header: approach 1, approach 2 (needs the SymPointV2 service on your
+computer) or **Compare both**. `python -m sympoint_converter web` starts the service and opens the app locally.
+Setup (local NVIDIA GPU, no change to the system CUDA) and usage: [sympoint_converter/README.md](sympoint_converter/README.md).
+
 ## Try it
 
 1. Open the web app (or run it locally, see below).
@@ -115,6 +127,7 @@ architectural_converter/
   visualization/    SVG overlay, HTML report, web view payload
   benchmark/        plan specs, DXF writer, drawings + references, metrics, runner, regression baseline
   config/           all thresholds and weights (JSON)
+sympoint_converter/ approach 2: SymPointV2 request / labels, raw-label viewer, CLI, GPU service (service/)
 web/                browser UI (HTML/JS, three.js, Pyodide worker)
 scripts/            build_site.py
 tests/              ingestion, preprocessing, detectors, reconstruction, topology, integration

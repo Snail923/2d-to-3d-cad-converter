@@ -17,10 +17,11 @@ test = ["pytest>=8"]
 architectural-converter = "architectural_converter.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["architectural_converter*"]
+include = ["architectural_converter*", "sympoint_converter*"]
 
 [tool.setuptools.package-data]
 architectural_converter = ["config/*.json", "benchmark/*.json", "benchmark/drawings/*"]
+sympoint_converter = ["config.json", "service/*", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

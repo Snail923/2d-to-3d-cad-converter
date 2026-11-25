@@ -125,14 +125,37 @@ class OpeningReconstructor:
                 best = ("wall", v, d)
         return best
 
-    def _match_symbol(self, w: Wall, a: float, b: float, cands, relative_to_chord: bool = False):
+    @staticmethod
+    def _chords(o, w: Wall, primary_only: bool = False):
+        """Candidate chords of an opening with a weight.
+
+        * the detected chord (weight 1);
+        * the alternative chord(s): the other swing position of a door. When the drawn leaf was
+          identified the alternative is only a fallback (weight 0.85), otherwise it is equal;
+        * for a swing door, the hinge swung along the wall direction (both ways): a door whose
+          leaf / frame lines are drawn unusually is still explained by an arc whose hinge sits
+          at the jamb of a gap of the leaf's width (weight 0.8)."""
+        known = bool(o.swing and o.swing.get("leaf_known"))
+        out = [((o.p0, o.p1), 1.0)]
+        if primary_only and known:
+            return out
+        out += [(ch, 0.85 if known else 1.0) for ch in o.alt_chords]
+        if not primary_only and o.type == "door" and o.hinge is not None and o.swing and o.swing.get("leaves") == 1:
+            r = o.swing.get("radius") or o.width
+            h = o.hinge
+            for sg in (1.0, -1.0):
+                out.append(((h, (h[0] + sg * w.u[0] * r, h[1] + sg * w.u[1] * r)), 0.8))
+        return out
+
+    def _match_symbol(self, w: Wall, a: float, b: float, cands, relative_to_chord: bool = False,
+                      primary_only: bool = False):
         """Best door/window whose chord lies within slot [a, b] on wall w."""
         t = w.thickness or 0.0
         best = None
         for o in cands:
             if o.host_wall is not None or o.status == Status.REJECTED:
                 continue
-            for p0, p1 in [(o.p0, o.p1)] + list(o.alt_chords):
+            for (p0, p1), weight in self._chords(o, w, primary_only):
                 d = (p1[0] - p0[0], p1[1] - p0[1])
                 L = math.hypot(*d)
                 if L <= 0 or abs(dot(d, w.u)) / L < 0.9:
@@ -146,8 +169,8 @@ class OpeningReconstructor:
                 if ov <= 0:
                     continue
                 score = ov / (x1 - x0) if relative_to_chord else ov / max(b - a, x1 - x0)
-                if score >= 0.6 and (best is None or score > best[0]):
-                    best = (score, o, (p0, p1))
+                if score >= 0.6 and (best is None or score * weight > best[0]):
+                    best = (score * weight, o, (p0, p1))
         return best
 
     def _host(self, o: Opening, w: Wall, a: float, b: float, score: float, chord, gap_match: bool):
@@ -239,7 +262,7 @@ class OpeningReconstructor:
             for w in self._near(chord, 0.6 + self.max_t):
                 if w.kind not in ("straight", "centerline"):
                     continue
-                m = self._match_symbol(w, w.s0, w.s1, [o], relative_to_chord=True)
+                m = self._match_symbol(w, w.s0, w.s1, [o], relative_to_chord=True, primary_only=True)
                 if m is None:
                     continue
                 score, _, (p0, p1) = m
@@ -256,7 +279,28 @@ class OpeningReconstructor:
             else:
                 self.log["unhosted"] += 1
         walls[:] = [w for w in walls if id(w) in self._live_ids or w.status == Status.REJECTED]
-        return generic
+        return self._dedupe(walls, symbols, generic)
+
+    def _dedupe(self, walls, symbols, generic):
+        """One wall interval holds one opening. An unidentified gap that a door / window already
+        occupies on the same wall is the same opening seen twice and is dropped."""
+        by_wall: dict[str, list] = {}
+        for o in symbols:
+            if o.host_wall is not None and o.host_interval and o.status != Status.REJECTED:
+                by_wall.setdefault(o.host_wall, []).append(o.host_interval)
+        keep = []
+        for g in generic:
+            a, b = g.host_interval
+            dup = any(min(b, y) - max(a, x) > 0.5 * min(b - a, y - x) for x, y in by_wall.get(g.host_wall, []))
+            if dup:
+                for w in walls:
+                    if w.id == g.host_wall and g.id in w.openings:
+                        w.openings.remove(g.id)
+                self.log["unidentified"] -= 1
+                self.log["duplicates_removed"] = self.log.get("duplicates_removed", 0) + 1
+                continue
+            keep.append(g)
+        return keep
 
     def _generic(self, host, a, b, generic):
         o = Opening(id=self.ids.new("opening"), type="opening", subtype="unidentified")

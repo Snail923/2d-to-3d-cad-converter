@@ -48,5 +48,7 @@ class Room(ArchitecturalEntity):
             "boundary_support": {k: round(v, 3) for k, v in self.boundary_support.items()},
             "is_hypothesis": self.is_hypothesis,
             "hypothesis_walls": self.hypothesis_walls,
+            "floor_parts": ([[[round(float(x), 4), round(float(y), 4)] for x, y in q.exterior.coords]
+                             for q in self.__dict__["floor_parts"]] if "floor_parts" in self.__dict__ else None),
         })
         return d

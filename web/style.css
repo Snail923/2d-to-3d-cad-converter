@@ -28,7 +28,11 @@ main { display: flex; height: calc(100% - 52px - 26px); }
 .sep { flex: 1; }
 #svgwrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fbfbfd; }
 #svg { width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
-#svg.tool-addwall, #svg.tool-connect, #svg.tool-room { cursor: crosshair; }
+#svg.tool-addwall, #svg.tool-connect, #svg.tool-room, #svg.tool-cutwall, #svg.tool-moveend, #svg.tool-adddoor, #svg.tool-addwindow, #svg.tool-addfloor, #svg.tool-cutfloor { cursor: crosshair; }
+#svg.tool-delete, #svg.tool-closeop { cursor: not-allowed; }
+.toolbar { flex-wrap: wrap; row-gap: 4px; }
+#svg .pending.cut { stroke: #e02020; fill: #e02020; fill-opacity: .15; }
+#svg .pending.add { stroke: #1a9c4b; fill: #1a9c4b; fill-opacity: .15; }
 .hint { position: absolute; left: 10px; bottom: 10px; background: rgba(31,42,68,.85); color: #fff; padding: 5px 9px; border-radius: 6px; font-size: 12px; display: none; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #889; font-size: 15px; pointer-events: none; }
 #view3d { flex: 1; min-height: 0; position: relative; }
@@ -87,6 +91,8 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 #svg .wall.cls-exterior_wall { fill: #1d4f91; stroke: #1d4f91; }
 #svg .wall.cls-interior_wall { fill: #2f7d32; stroke: #2f7d32; }
 #svg .wall.cls-partition_wall { fill: #7cb342; stroke: #5f8f30; }
+#svg .wall.cls-railing { fill: #00897b; stroke: #00897b; stroke-dasharray: 4 2; }
+#svg .room.cls-balcony { fill: #b2dfdb; stroke: #00897b; }
 #svg .wall.st-NEEDS_REVIEW { fill: #f2a33a; stroke: #e08a00; stroke-dasharray: 5 3; fill-opacity: .45; }
 #svg .wall.st-REJECTED { fill: #d32f2f; stroke: #d32f2f; fill-opacity: .12; stroke-opacity: .5; stroke-dasharray: 2 3; }
 #svg .axis { stroke: #1d2330; stroke-opacity: .35; stroke-width: 0.8; fill: none; vector-effect: non-scaling-stroke; pointer-events: none; }
@@ -113,10 +119,24 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 #svg .roomlabel { fill: #8a6d00; font-family: sans-serif; text-anchor: middle; pointer-events: none; }
 #svg .selected { stroke: #ff1f6b !important; stroke-width: 3 !important; fill-opacity: .7 !important; }
 #svg.hide-dxf .dxf, #svg.hide-hatch .hatch, #svg.hide-dxftext .dxftexts, #svg.hide-rooms .rooms, #svg.hide-roomlabels .roomlabels,
-#svg.hide-exterior .cls-exterior_wall, #svg.hide-interior .cls-interior_wall, #svg.hide-partition .cls-partition_wall,
+#svg.hide-exterior .cls-exterior_wall, #svg.hide-exterior .cls-railing, #svg.hide-interior .cls-interior_wall, #svg.hide-partition .cls-partition_wall,
 #svg.hide-review .wall.st-NEEDS_REVIEW, #svg.hide-rejected .st-REJECTED, #svg.hide-doors .t-door, #svg.hide-windows .t-window,
 #svg.hide-openings .t-opening, #svg.hide-columns .columns, #svg.hide-stairs .stairs, #svg.hide-hyps .hyps, #svg.hide-issues .issues, #svg.hide-axes .axes { display: none; }
 
 .loadlog { text-align: left; max-height: 180px; overflow: auto; margin: 10px 0; padding-left: 22px; color: #4a5168; }
 .loadlog li.done { color: #9aa0b1; }
 #loadingTime { margin-top: 6px; color: #3a6df0; }
+
+/* method selection (approach 1 rules / approach 2 SymPointV2 / compare) */
+.method { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid #c8cbd3; border-radius: 6px; overflow: hidden; }
+.seg button { border: none; background: #fff; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid #c8cbd3; }
+.seg button.active { background: #1f2a44; color: #fff; }
+.aigrid { display: grid; gap: 4px; margin: 6px 0; }
+.aigrid input { width: 100%; padding: 4px 6px; border: 1px solid #c8cbd3; border-radius: 5px; font: inherit; }
+.corr code { font-size: 11px; background: #eef1f7; padding: 1px 4px; border-radius: 3px; }
+.ok { color: #2e7d32; } .err { color: #c62828; }
+table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { color: #c62828; }
+.legendrow { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 2px 0; }
+.legendrow i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }

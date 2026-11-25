@@ -103,6 +103,9 @@ def build_model(st, cfg) -> dict[str, Any]:
                                                               "height": None, "kind": "floor_plan", "z": 0.0,
                                                               "translation": [0.0, 0.0]}],
             "stacked": bool(b.levels),
+            # areas inside the building that no room covers: Phase 2 gives them a ground slab
+            "ground": [{"polygon": coords_list(p), "level": lid, "area": round(p.area, 3)}
+                       for p, lid in (getattr(st, "ground", None) or [])],
         },
         "walls": walls,
         "openings": openings,

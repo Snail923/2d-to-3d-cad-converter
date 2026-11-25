@@ -64,7 +64,10 @@ class WindowDetector(BaseDetector):
             o.symbol_insert = ref.id
             o.source_entities.add(ref.id)
             o.add_evidence("symbol", 1.0)
-            o.add_evidence("name_hint", min(1.0, ref.role_scores.get("window", 0)))
+            # name / layer semantics only: the geometric signature is already the symbol itself
+            o.add_evidence("name_hint", min(1.0, (ref.semantic_scores or {}).get("window", 0.0)))
+            o.notes.append("window symbol by geometry only (no window name / layer)"
+                           if not (ref.semantic_scores or {}).get("window") else "window symbol (name / layer)")
             o.add_evidence("layer_match", ctx.layer_score(ref.layer, "window"))
             out.append(o)
         return out

@@ -64,7 +64,10 @@
     "min_lines": 2,
     "length_match_tol": 0.06,
     "span_coverage": 0.8,
-    "obstruction_min_consistency": 0.4
+    "obstruction_min_consistency": 0.4,
+    "symbol_max_curve_share": 0.25,
+    "symbol_min_span": 0.8,
+    "symbol_min_band_share": 0.5
   },
   "column": {
     "size_m": [
@@ -81,7 +84,8 @@
   "symbols": {
     "max_symbol_extent_m": 3.2,
     "assembly_min_extent_m": 3.0,
-    "role_min_score": 0.4
+    "role_min_score": 0.4,
+    "furniture_semantic_discount": 0.3
   },
   "weights": {
     "wall": {
@@ -211,6 +215,16 @@
     ],
     "full_flight_max_rise_m": 0.21,
     "default_rise_m": 0.175,
-    "wall_veto_overlap": 0.8
+    "wall_veto_overlap": 0.8,
+    "max_well_m": 0.8,
+    "max_landing_m": 3.0,
+    "arrow_stroke_m": [
+      0.04,
+      0.6
+    ],
+    "arrow_half_angle_deg": [
+      15.0,
+      75.0
+    ]
   }
 }

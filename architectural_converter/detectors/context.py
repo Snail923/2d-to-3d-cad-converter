@@ -207,8 +207,10 @@ def build_context(drawing, segments: list[Segment], tol: Tolerances, cfg) -> Dra
     ctx.dimensions = collect_dimensions(drawing)
     ctx.hatch_regions = analyze_fills(drawing, cfg, tol)
     ctx.area_outlines = collect_area_outlines(drawing, tol)
+    skip = set(cfg["layer_semantics"].get("non_building_categories", {}).get(
+        "categories", ("dimension", "annotation", "ignore")))
     live = [s for s in segments if s.role in LINEWORK_ROLES and s.dup_of is None
-            and ctx.layer_primary(s.layer) not in ("dimension", "annotation", "ignore")]
+            and ctx.layer_primary(s.layer) not in skip]
     ctx.strokes = build_strokes(live, tol.snap, tol.angle)
     ctx.stroke_tree = STRtree([st.line() for st in ctx.strokes]) if ctx.strokes else None
     ctx.arcs = build_arcs(drawing)

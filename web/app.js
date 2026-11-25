@@ -25,6 +25,7 @@ function startWorker() {
 startWorker();
 $("#cancelJob").addEventListener("click", async () => {
   if (!confirm("Stop processing this drawing? The engine will restart (about 10 s).")) return;
+  S.cancelled = true;
   setStatus("Cancelled. Restarting the engine…");
   $("#cancelJob").style.display = "none";
   try { await recoverEngine(); setStatus("Cancelled. Engine ready — you can load another drawing."); }
@@ -35,6 +36,7 @@ $("#cancelJob").addEventListener("click", async () => {
 async function recoverEngine() {
   for (const p of pending.values()) p.reject(new Error("engine restarted"));
   pending.clear();
+  S.results = {};       // the Python-side results are gone with the old engine
   startWorker();
   await call("init", { base: BASE });
   setLoading(null);
@@ -52,8 +54,20 @@ const S = {
   data: null, model: null, view: null, byId: new Map(), selected: null,
   corrections: emptyCorr(), history: [], fileName: null, fileBytes: null, sampleRef: null,
   tool: "select", draft: [], vb: null, samples: [], busy: false,
+  // two extraction methods: "rules" (approach 1) and "sympoint" (approach 2, SymPointV2 on a local GPU)
+  method: "rules", show: "rules", results: {}, corrByMethod: {}, spAvailable: false, spCache: new Map(), cancelled: false,
 };
-function emptyCorr() { return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {} }; }
+const SP_KEY = "cad2d3d.method";
+const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false, reasoning: true };
+try { Object.assign(SPC, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
+function saveSpc() { try { localStorage.setItem(SP_KEY, JSON.stringify(SPC)); } catch { /* private mode */ } }
+const METHOD_NAME = { rules: "approach 1 (rules)", sympoint: "approach 2 (SymPointV2)" };
+function emptyCorr() {
+  return { version: 1, status_overrides: {}, added_walls: [], room_overrides: [], opening_type_overrides: {},
+    wall_edits: {}, wall_cuts: [], added_openings: [], opening_edits: {}, added_floors: [], floor_cuts: [] };
+}
+const POLY_TOOLS = new Set(["room", "addfloor", "cutfloor"]);       // click corners, finish with Enter / double-click
+const PICK_TOOLS = new Set(["delete", "closeop"]);                  // click an element
 
 function setStatus(t) { $("#status").textContent = t; }
 // loading panel with a live step log, elapsed time and a cancel button for long drawings
@@ -110,6 +124,8 @@ function download(name, data, type) {
       sel.appendChild(o);
     }
     $("#build").textContent = `· engine ${info.version} · built ${info.built}`;
+    S.spAvailable = !!info.sympoint;
+    initMethodUi();
     setLoading(null);
     setStatus("Ready. Open a DXF file or load a sample.");
     renderBenchmark();
@@ -143,13 +159,38 @@ async function loadSample() {
   await runFile(file, buf);
 }
 
-async function runFile(name, buf, disabled = [], safe = false) {
+async function runFile(name, buf) {
+  if (S.busy) return;
+  S.fileName = name; S.fileBytes = buf.slice(0);
+  S.results = {}; S.corrByMethod = { rules: emptyCorr(), sympoint: emptyCorr() };
+  S.corrections = S.corrByMethod.rules; S.history = [];
+  await spSafe("sp_reset");
+  $("#tabCompareBtn").style.display = "none";
+  await applyMethod();
+}
+
+// run what the selected method needs for the loaded drawing (results already computed are kept)
+async function applyMethod() {
+  updateMethodUi();
+  if (!S.fileBytes || S.busy) return;
+  const need = S.method === "compare" ? ["rules", "sympoint"] : [S.method];
+  if (S.show && S.results[S.show]) await spSafe("sp_activate", { method: S.show });
+  for (const m of need) {
+    if (S.results[m]) continue;
+    if (m === "rules") await runRules(S.fileName, S.fileBytes.slice(0));
+    else await runSymPoint(S.fileName, S.fileBytes.slice(0));
+  }
+  const want = S.method === "compare" ? (S.results.sympoint ? "sympoint" : "rules") : S.method;
+  if (S.results[want]) await show(want);
+  if (S.method === "compare" && S.results.rules && S.results.sympoint) await renderCompare();
+  updateMethodUi();
+}
+
+async function runRules(name, buf, disabled = [], safe = false) {
   if (S.busy) return;
   S.busy = true;
-  S.fileName = name; S.fileBytes = buf.slice(0);
-  S.corrections = emptyCorr(); S.history = [];
   const notes = [...disabled.map((d) => d.replace(/_/g, " ")), ...(safe ? ["safe mode"] : [])];
-  startJob(`Analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` + (notes.length ? ` — retry: ${notes.join(", ")}` : "") + "…");
+  startJob(`Approach 1 (rules): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)` + (notes.length ? ` — retry: ${notes.join(", ")}` : "") + "…");
   const t0 = performance.now();
   let retry = null;
   try {
@@ -158,8 +199,12 @@ async function runFile(name, buf, disabled = [], safe = false) {
     if (safe) runtime.safe_mode = true;
     const config = Object.keys(runtime).length ? { runtime } : null;
     const res = await call("process", { name, bytes: buf, config }, [buf]);
-    load(JSON.parse(res));
-    setStatus(`${name}: processed in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+    S.results.rules = JSON.parse(res);
+    await spSafe("sp_remember", { method: "rules" });
+    if (S.show) S.corrByMethod[S.show] = S.corrections;
+    S.show = null;
+    await show("rules");
+    setStatus(`${name}: approach 1 (rules) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
       (notes.length ? ` (after an engine error: ${notes.join(", ")})` : ""));
   } catch (e) {
     if (/engine restarted/.test(e.message)) return;  // cancelled by the user
@@ -183,19 +228,249 @@ async function runFile(name, buf, disabled = [], safe = false) {
     setLoading(null);
     S.busy = false;
   }
-  if (retry) await runFile(name, S.fileBytes, retry[0], retry[1]);
+  if (retry) await runRules(name, S.fileBytes.slice(0), retry[0], retry[1]);
+}
+
+// ------------------------------------------------------------------ approach 2: SymPointV2 on the local GPU
+// approach-2 bookkeeping must never disturb approach 1: if it fails, approach 2 is switched off
+async function spSafe(cmd, args = {}) {
+  if (!S.spAvailable) return null;
+  try { return await call(cmd, args); }
+  catch (e) {
+    if (/engine restarted/.test(e.message)) throw e;
+    S.spAvailable = false;
+    $("#spStatus").innerHTML = `<b class="err">Approach 2 is unavailable in this build:</b> ${esc(e.message.split("\n").slice(-2).join(" "))}`;
+    for (const o of $("#method").options) if (o.value !== "rules") o.disabled = true;
+    return null;
+  }
+}
+function spEndpoint() { return SPC.endpoint.trim().replace(/\/+$/, ""); }
+function spHelp(msg) {
+  return `${esc(msg)}<br>Start the service on this computer: <code>python -m sympoint_converter server start</code>
+    (setup: <code>sympoint_converter/README.md</code>), then press <b>Test connection</b>.`;
+}
+async function spPredict(req) {
+  const tiles = req.tiles, out = [], per = 8, t0 = performance.now();
+  for (let i = 0; i < tiles.length; i += per) {
+    if (S.cancelled) throw new Error("cancelled");
+    setLoading(`SymPointV2 on your GPU: ${Math.min(i + per, tiles.length)}/${tiles.length} tiles…`);
+    let r;
+    try {
+      r = await fetch(spEndpoint() + "/predict", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tiles: tiles.slice(i, i + per) }) });
+    } catch (e) {
+      throw new Error(`the SymPointV2 service is not reachable at ${spEndpoint()} (${e.message})`);
+    }
+    if (!r.ok) {
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).error || msg; } catch { /* plain text */ }
+      throw new Error(`the SymPointV2 service answered ${r.status}: ${msg.slice(0, 400)}`);
+    }
+    out.push(...(await r.json()).tiles);
+  }
+  return { model: "SymPointV2", tiles: out, seconds: +((performance.now() - t0) / 1000).toFixed(2) };
+}
+
+async function runSymPoint(name, buf) {
+  if (S.busy || !S.spAvailable) return;
+  S.busy = true; S.cancelled = false;
+  startJob(`Approach 2 (SymPointV2): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
+  const t0 = performance.now();
+  const config = { tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false };
+  const key = `${name}|${buf.byteLength}|${config.tile_m}`;
+  try {
+    let resp = S.spCache.get(key);
+    if (!resp) {
+      const req = JSON.parse(await call("sp_request", { name, bytes: buf.slice(0), config }));
+      setLoading(`SymPointV2: ${req.primitives.toLocaleString()} lines in ${req.tiles.length} tile(s) of ${config.tile_m} m → ${spEndpoint()}`);
+      resp = JSON.stringify(await spPredict(req));
+      S.spCache.set(key, resp);
+    } else {
+      setLoading("SymPointV2 labels for this drawing are already known (cached)");
+    }
+    setLoading("Building walls, doors and windows from the labels…");
+    // A geometry (GEOS) error aborts the whole Python engine in the browser: no traceback is
+    // possible. Remember the step it died in, restart the engine and retry once in safe mode.
+    const FATAL = /Topology|GEOS|non-noded|depth|fatally failed|Pyodide already|memory access|unreachable/i;
+    const attempt = async (safe) => {
+      try {
+        return JSON.parse(await call("sp_process", { name, bytes: buf.slice(0), response: resp, config, safe }));
+      } catch (e) {
+        if (!FATAL.test(e.message)) throw e;
+        const step = S.lastProgress || "?";
+        setLoading("The Python engine crashed (geometry error) during “" + step + "” — restarting it…");
+        try { await recoverEngine(); } catch (e2) { /* reported below */ }
+        e.step = step;
+        throw e;
+      }
+    };
+    try {
+      S.results.sympoint = await attempt(false);
+    } catch (e) {
+      if (!e.step) throw e;
+      const first = `${e.message.trim().split("\n").pop()}\n  during: ${e.step}`;
+      startJob(`Approach 2: retrying ${name} in safe mode (no missing-room recovery, door rules, ground fill)…`);
+      try {
+        S.results.sympoint = await attempt(true);
+        S.results.sympoint.safeMode = first;
+      } catch (e2) {
+        throw new Error(`${first}\n\n--- retry in safe mode (fresh engine) also failed ---\n` +
+          `${e2.message.trim().split("\n").pop()}` + (e2.step ? `\n  during: ${e2.step}` : ""));
+      }
+    }
+    if (S.show) S.corrByMethod[S.show] = S.corrections;
+    S.show = null;
+    await show("sympoint");
+    const sp = S.results.sympoint.sympoint;
+    $("#spBadge").textContent = "on";
+    $("#spStatus").innerHTML = `<span class="ok">Done:</span> ${sp.extract.labelled_entities.toLocaleString()} DXF entities labelled` +
+      (sp.model_seconds ? ` in ${sp.model_seconds} s on the GPU` : "") + ".";
+    $("#spStatus").innerHTML += `<details open><summary>reasoning on the model's answer${SPC.reasoning === false ? " (off)" : ""}</summary><table class="grid small">` +
+      (sp.reasoning || []).map(([m, t]) => `<tr><td>${esc(m)}</td><td>${esc(t)}</td></tr>`).join("") + "</table></details>";
+    setStatus(`${name}: approach 2 (SymPointV2) in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+      (S.results.sympoint.safeMode ? " (safe mode after a geometry error: no door rules / ground fill — see the SymPointV2 panel)" : ""));
+    if (S.results.sympoint.safeMode) $("#spStatus").innerHTML += `<details><summary>first attempt crashed (details)</summary><pre class="mono small" style="white-space:pre-wrap">${esc(S.results.sympoint.safeMode)}</pre></details>`;
+  } catch (e) {
+    if (/engine restarted|cancelled/.test(e.message)) { setStatus("Cancelled."); return; }
+    const restart = /stops now|CUDA error/.test(e.message) ? " After a CUDA error the service stops itself: start it again." : "";
+    const lines = e.message.trim().split("\n");
+    const last = lines[lines.length - 1];
+    console.error("Approach 2 failed:\n" + e.message);
+    const geo = /Topology|GEOS|non-noded|depth/i.test(e.message);
+    $("#spStatus").innerHTML = `<b class="err">Approach 2 failed:</b> ${esc(last)}` +
+      (lines.length > 1 ? `<details><summary>details (Python traceback)</summary><pre class="mono small" style="white-space:pre-wrap;max-height:260px;overflow:auto">${esc(e.message)}</pre></details>` : "") +
+      (geo ? "" : `<br>${spHelp(restart.trim() || "Check that the SymPointV2 service is running.")}`);
+    $("#spBadge").textContent = "off";
+    setStatus("Approach 2 (SymPointV2) failed: " + last + " (details in the SymPointV2 service panel)");
+    $("#spPanel").open = true;
+  } finally {
+    setLoading(null);
+    S.busy = false;
+  }
+}
+
+// show one method's result (2D, 3D, issues, exports and re-runs then act on it)
+async function show(method) {
+  if (!S.results[method]) return;
+  if (S.show && S.show !== method) S.corrByMethod[S.show] = S.corrections;
+  if (S.show !== method) await spSafe("sp_activate", { method });
+  const same = S.show === method;
+  S.show = method;
+  S.corrections = S.corrByMethod[method] || (S.corrByMethod[method] = emptyCorr());
+  S.history = same ? S.history : [];
+  load(S.results[method], !!S.vb);
+  updateMethodUi();
 }
 
 async function rerun() {
   if (!S.model || S.busy) return;
   S.busy = true;
-  startJob("Re-running resolution, reconstruction, topology and validation with your corrections…");
+  startJob(`Re-running ${METHOD_NAME[S.show] || ""} from resolution with your corrections…`);
   try {
     const t0 = performance.now();
-    load(JSON.parse(await call("rerun", { corrections: S.corrections })), true);
+    const data = JSON.parse(await call(S.spAvailable ? "sp_rerun" : "rerun", { corrections: S.corrections }));
+    S.results[S.show] = data;
+    load(data, true);
     setStatus(`Re-run with ${countCorr()} correction(s) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    if (S.method === "compare" && S.results.rules && S.results.sympoint) await renderCompare();
   } catch (e) { alert("Re-run failed: " + e.message); }
   finally { setLoading(null); S.busy = false; }
+}
+
+// ------------------------------------------------------------------ method UI
+function initMethodUi() {
+  const sel = $("#method");
+  if (!S.spAvailable) { for (const o of sel.options) if (o.value !== "rules") o.disabled = true; SPC.method = "rules"; }
+  S.method = SPC.method;
+  sel.value = S.method;
+  $("#spEndpoint").value = SPC.endpoint;
+  $("#spTile").value = SPC.tile;
+  $("#spColour").checked = !!SPC.colour;
+  sel.addEventListener("change", async () => { S.method = SPC.method = sel.value; saveSpc(); await applyMethod(); });
+  $("#spEndpoint").addEventListener("change", () => { SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc(); });
+  $("#spTile").addEventListener("change", () => { SPC.tile = Math.max(5, Math.min(60, +$("#spTile").value || 20)); $("#spTile").value = SPC.tile; saveSpc(); });
+  $("#spColour").addEventListener("change", () => { SPC.colour = $("#spColour").checked; saveSpc(); if (S.view) draw2d(true); renderSpLegend(); });
+  $("#spReasoning").checked = SPC.reasoning !== false;
+  $("#spReasoning").addEventListener("change", async () => {
+    SPC.reasoning = $("#spReasoning").checked; saveSpc();
+    if (S.fileBytes && !S.busy && S.results.sympoint) {           // rebuild from the cached model answer (no GPU run)
+      delete S.results.sympoint;
+      await applyMethod();
+    }
+  });
+  $("#spTest").addEventListener("click", spTest);
+  for (const b of $$("#showSwitch [data-show]")) b.addEventListener("click", () => !S.busy && show(b.dataset.show));
+  updateMethodUi();
+  if (S.method !== "rules") spTest(true);
+}
+async function spTest(quiet = false) {
+  SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc();
+  $("#spStatus").textContent = "Contacting " + spEndpoint() + "…";
+  try {
+    const j = await (await fetch(spEndpoint() + "/health")).json();
+    $("#spBadge").textContent = "on";
+    $("#spStatus").innerHTML = `<span class="ok">Connected:</span> ${esc(j.model || "SymPointV2")} on ${esc(j.device || "?")}` +
+      (j.weights_loaded ? ` · weights ${(100 * j.weights_loaded).toFixed(0)}%` : "") + ".";
+  } catch (e) {
+    $("#spBadge").textContent = "off";
+    $("#spStatus").innerHTML = (quiet ? "" : "<b class='err'>Not reachable.</b> ") + spHelp(`No SymPointV2 service at ${spEndpoint()}.`);
+  }
+}
+function updateMethodUi() {
+  const both = !!(S.results.rules && S.results.sympoint);
+  $("#spPanel").style.display = S.method === "rules" && !S.results.sympoint ? "none" : "";
+  $("#showSwitch").style.display = both ? "" : "none";
+  for (const b of $$("#showSwitch [data-show]")) b.classList.toggle("active", b.dataset.show === S.show);
+  $("#tabCompareBtn").style.display = both ? "" : "none";
+  $("#spColourBox").style.display = S.results.sympoint ? "" : "none";
+  renderSpLegend();
+}
+function spLabels() { return S.results.sympoint && S.results.sympoint.sympoint; }
+function renderSpLegend() {
+  const sp = spLabels();
+  if (!sp || !SPC.colour) { $("#spLegend").innerHTML = ""; return; }
+  const used = new Set(Object.values(sp.entity_class).map((v) => v[0]));
+  $("#spLegend").innerHTML = "Line colours: " + sp.classes.map((c, i) => used.has(i)
+    ? `<span class="legendrow"><i style="background:rgb(${sp.colors[i].join(",")})"></i>${esc(c)}</span>` : "").join("");
+}
+
+async function renderCompare() {
+  try {
+    if (S.spAvailable && S.show) await call("sp_activate", { method: S.show });
+    const c = JSON.parse(await call("sp_compare"));
+    if (c.error) { $("#compare").innerHTML = `<p class="muted">${esc(c.error)}</p>`; return; }
+    let scores = null;
+    if (S.sampleRef) {
+      const ref = await (await fetch(BASE + "samples/" + S.sampleRef)).text();
+      scores = JSON.parse(await call("sp_evaluate_both", { reference: ref }));
+    }
+    const rows = Object.keys(c.rules).map((k) => `<tr><td>${esc(k.replace(/_/g, " "))}</td><td class="num">${c.rules[k]}</td><td class="num">${c.sympoint[k]}</td></tr>`).join("");
+    const keys = ["wall_precision", "wall_recall", "room_precision", "room_recall", "door_precision", "door_recall",
+      "window_precision", "window_recall", "column_precision", "column_recall", "manual_corrections_required"];
+    const scoreRows = scores ? keys.map((k) => {
+      const a = scores.rules[k], b = scores.sympoint[k];
+      const lowerBetter = k === "manual_corrections_required";
+      const cls = Math.abs(b - a) < 0.005 ? "" : ((b > a) !== lowerBetter ? "better" : "worse");
+      const f = (v) => Number.isInteger(v) ? v : (+v).toFixed(2);
+      return `<tr><td>${esc(k.replace(/_/g, " "))}</td><td class="num">${f(a)}</td><td class="num ${cls}">${f(b)}</td></tr>`;
+    }).join("") : "";
+    const sp = spLabels();
+    const groups = sp ? Object.entries(sp.summary.groups).map(([g, v]) => `${esc(g)} ${(100 * v).toFixed(0)}%`).join(", ") : "";
+    $("#compare").innerHTML = `
+      <p>Both methods ran on <b>${esc(S.fileName)}</b>. They share everything after the extraction (reconstruction, rooms, classification,
+        validation, export, 3D), so differences come from how walls, doors and windows were found. Use the
+        <b>Approach 1 / Approach 2</b> switch in the 2D toolbar to review, correct and export either result.</p>
+      ${scores ? `<h3>Scores against the reference geometry of this sample</h3>
+        <table class="grid cmp"><tr><th></th><th>approach 1 (rules)</th><th>approach 2 (SymPointV2)</th></tr>${scoreRows}</table>
+        <p class="small muted">Green / red: approach 2 better / worse than approach 1.</p>` : ""}
+      <h3>Result</h3><table class="grid"><tr><th></th><th>approach 1 (rules)</th><th>approach 2 (SymPointV2)</th></tr>${rows}
+        <tr><td>pipeline time (s)</td><td class="num">${c.timings.rules.toFixed(1)}</td><td class="num">${c.timings.sympoint.toFixed(1)}${sp && sp.model_seconds ? ` + ${sp.model_seconds} GPU` : ""}</td></tr></table>
+      <h3>Agreement (approach 1 used as the reference)</h3><table class="grid">${Object.entries(c.agreement).map(([k, v]) =>
+        `<tr><td>${esc(k)}</td><td class="num">${(100 * v).toFixed(0)}%</td></tr>`).join("")}</table>
+      <p class="small muted">Low agreement shows where to look; it does not say which method is right (no reference).</p>
+      ${sp ? `<h3>SymPointV2 labels</h3><p class="small">${esc(groups)} of the labelled line length · ${(100 * sp.summary.labelled_length_share).toFixed(0)}% of all lines labelled.
+        Tick <b>SymPointV2 classes</b> in the 2D toolbar to colour the drawing by class.</p>` : ""}`;
+  } catch (e) { $("#compare").innerHTML = `<p class="err">Comparison failed: ${esc(e.message)}</p>`; }
 }
 
 function load(data, keepView = false) {
@@ -216,10 +491,13 @@ function load(data, keepView = false) {
   renderInfo();
   renderCorr();
   viewer3d.setData(data.mesh, S.model);
+  updateRoofBox(data.mesh);
   const b = S.model.building || {}, fl = b.stacked ? b.levels.filter((l) => l.kind === "floor_plan").sort((x, y) => x.z - y.z) : [];
   $("#levels3dBox").style.display = fl.length ? "" : "none";
   $("#levels3d").innerHTML = fl.map((l, i) => `<option value="${i}" ${i === fl.length - 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
   viewer3d.setVisible("maxLevel", fl.length ? fl.length - 1 : Infinity);
+  $("#stack3dBox").style.display = b.stacked ? "" : "none";
+  $("#stack3d").checked = !!data.mesh.metadata.stacked_in_3d;
   const d = data.mesh.metadata.defaults_used || {};
   $("#defaults3d").textContent = Object.keys(d).length ? "Defaults applied (not in drawing): " +
     Object.entries(d).map(([k, v]) => `${k}=${v.value}`).join(", ") : "";
@@ -253,10 +531,15 @@ function draw2d(keepView) {
   for (const r of m.hypotheses.rooms) if (r.polygon) el("path", { class: "hyproom", d: polyD(r.polygon) }, gRooms);
   for (const r of m.rooms) {
     if (r.status === "REJECTED" || !r.polygon) continue;
-    el("path", { class: `el room st-${r.status}`, d: polyD(r.polygon), "data-id": r.id, "fill-rule": "evenodd" }, gRooms);
+    el("path", { class: `el room st-${r.status} cls-${r.classification || "none"}`, d: polyD(r.polygon), "data-id": r.id, "fill-rule": "evenodd" }, gRooms);
   }
   const gD = el("g", { class: "dxf" }, world);
-  for (const l of v.lines) el("path", { d: pathD(l.p), "data-r": l.r, class: "role-" + l.k }, gD);
+  const spl = SPC.colour ? spLabels() : null;
+  for (const l of v.lines) {
+    const e = el("path", { d: pathD(l.p), "data-r": l.r, class: "role-" + l.k }, gD);
+    const lc = spl && spl.entity_class[l.r];
+    if (lc) e.setAttribute("style", `stroke:rgb(${spl.colors[lc[0]].join(",")});stroke-width:1.4`);
+  }
   const gT = el("g", { class: "dxftexts" }, world);
   for (const t of v.texts) {
     const tx = el("text", { class: "dxftext", x: t.p[0], y: -t.p[1], "font-size": Math.max(t.h, 0.12), "text-anchor": "middle" }, gT);
@@ -380,6 +663,8 @@ svg.addEventListener("click", (ev) => {
     }
     return;
   }
+  if (PICK_TOOLS.has(S.tool)) { pickTool(toWorld(ev), ev); return; }
+  if (["cutwall", "moveend", "adddoor", "addwindow"].includes(S.tool)) { twoPointTool(toWorld(ev)); return; }
   const p = snap(toWorld(ev));
   if (S.tool === "addwall" || S.tool === "connect") {
     S.draft.push(p);
@@ -394,23 +679,124 @@ svg.addEventListener("click", (ev) => {
         note: S.tool === "connect" ? "manual endpoint connection" : "manual wall" }));
       S.draft = [];
     }
-  } else if (S.tool === "room") {
+  } else if (POLY_TOOLS.has(S.tool)) {
     S.draft.push(p);
   }
   drawDraft(p);
 });
-svg.addEventListener("dblclick", (ev) => { if (S.tool === "room") finishRoom(); });
+svg.addEventListener("dblclick", (ev) => { if (POLY_TOOLS.has(S.tool)) finishRoom(); });
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { S.draft = []; drawDraft(null); }
-  if (ev.key === "Enter" && S.tool === "room") finishRoom();
+  if (ev.target && /INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
+  if (ev.key === "Escape") { S.draft = []; S.moveWall = null; drawDraft(null); }
+  if (ev.key === "Enter" && POLY_TOOLS.has(S.tool)) finishRoom();
+  if ((ev.key === "Delete" || ev.key === "Backspace") && S.selected && S.byId.has(S.selected) && S.model) {
+    const it = S.byId.get(S.selected);
+    if (["wall", "opening", "room", "column", "stair"].includes(it.kind)) {
+      ev.preventDefault();
+      addCorr(() => { S.corrections.status_overrides[S.selected] = "REJECTED"; }, true);
+    }
+  }
 });
 function finishRoom() {
   const pts = dedupe(S.draft);
   S.draft = [];
   drawDraft(null);
   if (pts.length < 3) return;
+  if (S.tool === "addfloor") { addCorr(() => S.corrections.added_floors.push({ polygon: pts })); return; }
+  if (S.tool === "cutfloor") { addCorr(() => S.corrections.floor_cuts.push({ polygon: pts })); return; }
   const name = prompt("Room name (optional):", "") || null;
   addCorr(() => S.corrections.room_overrides.push({ polygon: pts, name }));
+}
+
+// ---- editing tools: geometry helpers (model coordinates, metres)
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1e-12;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return [Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)), t];
+}
+function liveWalls() { return S.model.walls.filter((w) => w.status !== "REJECTED" && w.geometry && w.geometry.start); }
+function wallAt(p) {            // the straight wall under a point (within its body + a few pixels)
+  let best = null, bd = Infinity;
+  for (const w of liveWalls()) {
+    const [d] = segDist(p, w.geometry.start, w.geometry.end);
+    if (d <= (w.thickness || 0.1) / 2 + pxToWorld(8) && d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
+function onWall(w, p) {         // p projected onto the wall's centre line (clamped to the wall)
+  const a = w.geometry.start, b = w.geometry.end, [, t] = segDist(p, a, b);
+  return [+(a[0] + t * (b[0] - a[0])).toFixed(4), +(a[1] + t * (b[1] - a[1])).toFixed(4)];
+}
+function openingAt(p) {
+  let best = null, bd = Infinity;
+  for (const o of S.model.openings) {
+    if (o.status === "REJECTED" || !o.position) continue;
+    const [d] = segDist(p, o.position.start, o.position.end);
+    if (d <= (o.depth || 0.15) / 2 + pxToWorld(8) && d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+function pickTool(p, ev) {
+  if (S.tool === "closeop") {
+    const o = openingAt(p);
+    if (!o) { flashHint("No door, window or gap here."); return; }
+    addCorr(() => { S.corrections.status_overrides[o.id] = "REJECTED"; }, true);
+    return;
+  }
+  // delete: the element under the pointer (an opening first, then what was clicked, then the wall)
+  const o = openingAt(p), t = ev.target.closest("[data-id]"), w = wallAt(p);
+  const id = o ? o.id : (t && S.byId.has(t.getAttribute("data-id")) ? t.getAttribute("data-id") : (w ? w.id : null));
+  const it = id && S.byId.get(id);
+  if (!it || !["wall", "opening", "room", "column", "stair"].includes(it.kind)) { flashHint("Nothing to delete here."); return; }
+  addCorr(() => { S.corrections.status_overrides[id] = "REJECTED"; }, true);
+}
+function twoPointTool(raw) {
+  if (S.tool === "moveend") {
+    if (!S.moveWall) {
+      let best = null, bd = pxToWorld(14);
+      for (const w of liveWalls()) for (const k of ["start", "end"]) {
+        const q = w.geometry[k], d = Math.hypot(q[0] - raw[0], q[1] - raw[1]);
+        if (d < bd) { bd = d; best = { w, k }; }
+      }
+      if (!best) { flashHint("Click closer to a wall end."); return; }
+      S.moveWall = best;
+      S.draft = [best.w.geometry[best.k === "start" ? "end" : "start"]];     // rubber line from the fixed end
+      drawDraft(raw);
+      return;
+    }
+    const { w, k } = S.moveWall, p = snap(raw);
+    const fixed = w.geometry[k === "start" ? "end" : "start"];
+    S.moveWall = null; S.draft = [];
+    if (Math.hypot(p[0] - fixed[0], p[1] - fixed[1]) < 0.02) { drawDraft(null); return; }
+    addCorr(() => {
+      const ed = S.corrections.wall_edits[w.id] || {};
+      S.corrections.wall_edits[w.id] = Object.assign(ed, k === "start" ? { start: p, end: fixed } : { start: fixed, end: p });
+    });
+    drawDraft(null);
+    return;
+  }
+  // cut wall / add door / add window: two points on one wall
+  if (!S.draft.length) {
+    const w = wallAt(raw);
+    if (!w) { flashHint("Click on a wall."); return; }
+    S.editWall = w;
+    S.draft = [onWall(w, raw)];
+    drawDraft(raw);
+    return;
+  }
+  const w = S.editWall, a = S.draft[0], b = onWall(w, raw);
+  S.draft = []; S.editWall = null;
+  drawDraft(null);
+  if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.02) return;
+  if (S.tool === "cutwall") addCorr(() => S.corrections.wall_cuts.push({ wall: w.id, start: a, end: b }));
+  else addCorr(() => S.corrections.added_openings.push({ type: S.tool === "adddoor" ? "door" : "window", wall: w.id, start: a, end: b }));
+}
+let hintTimer = null;
+function flashHint(t) {
+  const h = $("#hint"), old = h.textContent;
+  h.textContent = t; h.style.display = "block";
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { h.textContent = TOOL_HINTS[S.tool] || old; h.style.display = TOOL_HINTS[S.tool] ? "block" : "none"; }, 1800);
 }
 function dedupe(pts) { return pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-6); }
 
@@ -428,7 +814,7 @@ function snap(p) {
     if (d < bd) { bd = d; best = q; }
   }
   if (best) return [+best[0].toFixed(4), +best[1].toFixed(4)];
-  if (S.draft.length && S.tool !== "room") {  // orthogonal assist
+  if (S.draft.length && !POLY_TOOLS.has(S.tool)) {  // orthogonal assist
     const a = S.draft[S.draft.length - 1];
     const dx = Math.abs(p[0] - a[0]), dy = Math.abs(p[1] - a[1]);
     if (dy < pxToWorld(8)) return [p[0], a[1]];
@@ -452,33 +838,48 @@ function drawDraft(cur) {
   if (!g) return;
   g.innerHTML = "";
   const pts = S.draft.slice();
-  if (cur && S.tool !== "select") {
-    const s = snap(cur);
+  if (cur && S.tool !== "select" && !PICK_TOOLS.has(S.tool)) {
+    const s = S.editWall ? onWall(S.editWall, cur) : snap(cur);
     el("circle", { class: "snap", cx: s[0], cy: -s[1], r: pxToWorld(4) }, g);
     if (pts.length) pts.push(s);
   }
-  if (pts.length >= 2) el("path", { class: "rubber", d: pathD(pts, S.tool === "room" && pts.length > 2) }, g);
+  if (pts.length >= 2) el("path", { class: "rubber", d: pathD(pts, POLY_TOOLS.has(S.tool) && pts.length > 2) }, g);
 }
 function drawPending() {
   const g = $("#pending");
   if (!g) return;
   g.innerHTML = "";
   const applied = (S.model && S.model.corrections) || emptyCorr();
-  const same = JSON.stringify(applied.added_walls) === JSON.stringify(S.corrections.added_walls) &&
-    JSON.stringify(applied.room_overrides) === JSON.stringify(S.corrections.room_overrides);
-  if (same) return;
-  for (const w of S.corrections.added_walls) el("path", { class: "pending", d: pathD([w.start, w.end]) }, g);
-  for (const r of S.corrections.room_overrides) el("path", { class: "pending", d: pathD(r.polygon, true) }, g);
+  const c = Object.assign(emptyCorr(), S.corrections), ap = Object.assign(emptyCorr(), applied);
+  const keys = ["added_walls", "room_overrides", "wall_edits", "wall_cuts", "added_openings", "added_floors", "floor_cuts"];
+  if (keys.every((k) => JSON.stringify(ap[k]) === JSON.stringify(c[k]))) return;
+  for (const w of c.added_walls) el("path", { class: "pending", d: pathD([w.start, w.end]) }, g);
+  for (const r of c.room_overrides) el("path", { class: "pending", d: pathD(r.polygon, true) }, g);
+  for (const e of Object.values(c.wall_edits)) if (e.start) el("path", { class: "pending add", d: pathD([e.start, e.end]) }, g);
+  for (const w of c.wall_cuts) el("path", { class: "pending cut", d: pathD([w.start, w.end]) }, g);
+  for (const o of c.added_openings) el("path", { class: "pending add", d: pathD([o.start, o.end]) }, g);
+  for (const f of c.added_floors) el("path", { class: "pending add", d: pathD(f.polygon, true) }, g);
+  for (const f of c.floor_cuts) el("path", { class: "pending cut", d: pathD(f.polygon, true) }, g);
 }
 
 // tools
+const AFTER = " Then press “Re-run with corrections”.";
+const TOOL_HINTS = { select: "", addwall: "Click the start and end point of the missing wall (snaps to end points). Esc cancels.",
+  connect: "Click two wall end points to connect them with a wall of their average thickness.",
+  room: "Click the room corners, double-click or press Enter to finish. Esc cancels.",
+  delete: "Click a wall, door, window, column, stair or room to delete it (applied at once; Undo last + Re-run brings it back).",
+  cutwall: "Click two points on a wall: the part between them is removed." + AFTER,
+  moveend: "Click a wall end, then its new position." + AFTER,
+  adddoor: "Click the two ends of the door on a wall." + AFTER,
+  addwindow: "Click the two ends of the window on a wall." + AFTER,
+  closeop: "Click a door, window or gap to close it: the wall runs through (applied at once).",
+  addfloor: "Click the corners of the floor to add; double-click or Enter to finish." + AFTER,
+  cutfloor: "Click the corners of the floor to remove (void, stair opening); double-click or Enter to finish." + AFTER };
 for (const b of $$(".tool")) b.addEventListener("click", () => {
   $$(".tool").forEach((x) => x.classList.toggle("active", x === b));
-  S.tool = b.dataset.tool; S.draft = []; drawDraft(null);
+  S.tool = b.dataset.tool; S.draft = []; S.moveWall = null; S.editWall = null; drawDraft(null);
   svg.className.baseVal = svg.className.baseVal.replace(/tool-\S+/g, "") + " tool-" + S.tool;
-  const hints = { select: "", addwall: "Click the start and end point of the missing wall (snaps to end points). Esc cancels.",
-    connect: "Click two wall end points to connect them with a wall of their average thickness.",
-    room: "Click the room corners, double-click or press Enter to finish. Esc cancels." };
+  const hints = TOOL_HINTS;
   $("#hint").textContent = hints[S.tool]; $("#hint").style.display = hints[S.tool] ? "block" : "none";
   applyLayerClasses();
 });
@@ -585,8 +986,10 @@ function renderDetails(kind, o) {
   if (kind === "hypothesis") {
     buttons = `<button class="btn primary" id="accHyp">Accept as wall</button>`;
   } else if (kind !== "room_hypothesis") {
-    buttons = `<button class="btn" data-set="ACCEPTED">Accept</button> <button class="btn" data-set="REJECTED">Reject</button>
+    buttons = `<button class="btn" data-set="ACCEPTED">Accept</button> <button class="btn" data-set="REJECTED">${kind === "opening" ? "Close (wall instead)" : "Delete"}</button>
       ${ov ? `<button class="btn" data-set="">Reset (${ov})</button>` : ""}`;
+    if (kind === "wall" && o.geometry && o.geometry.start) buttons += `<div class="row small">thickness (m) <input id="editThick" type="number" step="0.01" min="0.02" style="width:70px" value="${o.thickness ? (+o.thickness).toFixed(3) : ""}"> <button class="btn small" id="setThick">Set</button></div>`;
+    if (kind === "opening" && o.type !== "opening") buttons += `<div class="row"><button class="btn small" data-otype="${o.type === "door" ? "window" : "door"}">→ ${o.type === "door" ? "window" : "door"}</button><button class="btn small" data-otype="opening">→ open passage</button></div>`;
     if (kind === "opening" && o.type === "opening") buttons += `<div class="row"><button class="btn small" data-otype="door">→ door</button><button class="btn small" data-otype="window">→ window</button></div>`;
   }
   $("#details").innerHTML = `
@@ -604,6 +1007,11 @@ function renderDetails(kind, o) {
   }, true));
   for (const b of $$("#details [data-otype]")) b.addEventListener("click", () => addCorr(() => { S.corrections.opening_type_overrides[o.id] = b.dataset.otype; }, true));
   for (const a of $$("#details [data-goto]")) a.addEventListener("click", (e) => { e.preventDefault(); select(a.dataset.goto); });
+  const st = $("#setThick");
+  if (st) st.addEventListener("click", () => {
+    const t = parseFloat($("#editThick").value);
+    if (isFinite(t) && t >= 0.02) addCorr(() => { S.corrections.wall_edits[o.id] = Object.assign(S.corrections.wall_edits[o.id] || {}, { thickness: +t.toFixed(4) }); }, true);
+  });
   const acc = $("#accHyp");
   if (acc) acc.addEventListener("click", () => addCorr(() => {
     const g = o.geometry;
@@ -614,7 +1022,9 @@ function renderDetails(kind, o) {
 // ------------------------------------------------------------------ corrections
 function countCorr() {
   const c = S.corrections;
-  return Object.keys(c.status_overrides).length + c.added_walls.length + c.room_overrides.length + Object.keys(c.opening_type_overrides).length;
+  return Object.keys(c.status_overrides).length + c.added_walls.length + c.room_overrides.length + Object.keys(c.opening_type_overrides).length +
+    Object.keys(c.wall_edits || {}).length + (c.wall_cuts || []).length + (c.added_openings || []).length +
+    Object.keys(c.opening_edits || {}).length + (c.added_floors || []).length + (c.floor_cuts || []).length;
 }
 function addCorr(fn, autoRerun = false) {
   S.history.push(JSON.stringify(S.corrections));
@@ -686,7 +1096,12 @@ function renderInfo() {
     <h3>Layer semantics (hints)</h3><table class="grid"><tr><th>layer</th><th>hint</th><th>wall evidence</th><th>entities</th><th>parallel share</th></tr>
       ${Object.values(S.view.layers).filter((l) => Object.keys(l.entity_counts).length).map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.primary || "—")}</td><td class="num">${(+l.wall_evidence).toFixed(2)}</td><td class="mono small">${esc(JSON.stringify(l.entity_counts))}</td><td class="num">${(+l.parallel_share).toFixed(2)}</td></tr>`).join("")}</table>
     <h3>Block symbols</h3><div class="mono small">${esc(JSON.stringify(ctx.symbol_roles))}</div>
-    <h3>Stage logs</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
+    ${S.data.sympoint ? `<h3>Approach 2: SymPointV2 labels → elements</h3><table class="grid">
+      <tr><td>labelled share of line length</td><td>${(100 * S.data.sympoint.summary.labelled_length_share).toFixed(1)}%</td></tr>
+      <tr><td>groups</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.summary.groups))}</td></tr>
+      ${(S.data.sympoint.reasoning || []).map(([m, t]) => `<tr><td>reasoning: ${esc(m)}</td><td>${esc(t)}</td></tr>`).join("")}
+      <tr><td>extraction</td><td class="mono small">${esc(JSON.stringify(S.data.sympoint.extract))}</td></tr></table>` : ""}
+    <h3>Stage logs (${esc(METHOD_NAME[S.show] || "")})</h3><pre class="mono small">${esc(JSON.stringify(logs, null, 1))}</pre>`;
 }
 
 function levelsTable(b) {
@@ -725,7 +1140,7 @@ async function renderBenchmark() {
 // ------------------------------------------------------------------ exports
 for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
   if (!S.model) return alert("Process a drawing first.");
-  const base = (S.fileName || "drawing").replace(/\.[^.]+$/, "");
+  const base = (S.fileName || "drawing").replace(/\.[^.]+$/, "") + (S.show === "sympoint" ? ".sympoint" : "");
   const kind = b.dataset.export;
   try {
     if (kind === "json") download(base + ".model.json", await call("export_json"), "application/json");
@@ -736,7 +1151,18 @@ for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ tabs + 3D
-const viewer3d = new Viewer3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+// The 3D view needs WebGL. When the browser cannot create it (GPU busy or blocked, hardware
+// acceleration off), the rest of the app keeps working and the 3D tab says why.
+let viewer3d;
+try {
+  viewer3d = new Viewer3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+} catch (e) {
+  console.error("3D viewer unavailable:", e);
+  viewer3d = { setData() {}, setVisible() {}, highlight() {}, resize() {} };
+  $("#view3d").innerHTML = `<p class="small" style="padding:16px"><b class="err">The 3D view could not start:</b> ${esc(e.message || e)}<br>
+    The browser did not give this page a WebGL context. Close other tabs that use 3D / the GPU, check that hardware
+    acceleration is on (chrome://gpu), then reload. 2D review, validation and all exports (including .glb) still work.</p>`;
+}
 function showTab(id) {
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === id));
@@ -746,5 +1172,23 @@ function showTab(id) {
 for (const b of $$(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
 $("#show3dFloors").addEventListener("change", (e) => viewer3d.setVisible("floor", e.target.checked));
 $("#show3dReview").addEventListener("change", (e) => viewer3d.setVisible("review", e.target.checked));
+$("#show3dRoofs").addEventListener("change", (e) => viewer3d.setVisible("roof", e.target.checked));
+function updateRoofBox(mesh) {
+  $("#roof3dBox").style.display = mesh.meshes.some((m) => m.type === "roof") ? "" : "none";
+  viewer3d.setVisible("roof", $("#show3dRoofs").checked);
+}
 $("#levels3d").addEventListener("change", (e) => viewer3d.setVisible("maxLevel", +e.target.value));
 $("#show3dGlass").addEventListener("change", (e) => viewer3d.setVisible("window", e.target.checked));
+$("#stack3d").addEventListener("change", async (e) => {
+  if (!S.model || S.busy) return;
+  S.busy = true;
+  startJob(e.target.checked ? "Stacking the floors at their levels…" : "Laying the floors side by side as drawn…", false);
+  try {
+    const mesh = JSON.parse(await call("sp_mesh", { stack: e.target.checked }));
+    S.data.mesh = mesh;
+    viewer3d.setData(mesh, S.model);
+    updateRoofBox(mesh);
+    viewer3d.setVisible("maxLevel", +$("#levels3d").value);
+  } catch (err) { alert("3D rebuild failed: " + err.message); }
+  finally { setLoading(null); S.busy = false; }
+});
