@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>2D to 3D CAD Converter: Benchmark Report</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+@page { size: A4; margin: 16mm 15mm 18mm 15mm; }
+:root { --fg: #1b1f27; --muted: #5d6573; --rule: #dfe3ea; --track: #eceff4; --accent: #1b64be; --panel: #f6f8fb;
+  --good: #0a7d2c; --warn: #a86400; --bad: #c62828; --good-bg: #e6f4ea; --warn-bg: #fdf1dc; --bad-bg: #fde8e8;
+  --fd: "Space Grotesk", "Segoe UI", sans-serif; --fb: "Inter", "Segoe UI", sans-serif; --fm: "JetBrains Mono", Menlo, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--fg); font-family: var(--fb); font-size: 10pt; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+h1, h2, h3 { font-family: var(--fd); margin: 0; line-height: 1.2; break-after: avoid; }
+h1 { font-size: 26pt; }
+h2 { font-size: 16pt; margin-top: 4pt; padding-bottom: 4pt; border-bottom: 2px solid var(--accent); }
+h3 { font-size: 11.5pt; margin-top: 6pt; }
+p { margin: 0; }
+section { display: flex; flex-direction: column; gap: 9pt; }
+.flowpage { display: flex; flex-direction: column; gap: 12pt; margin-top: 14pt; }
+.page { break-before: page; display: flex; flex-direction: column; gap: 12pt; }
+.muted { color: var(--muted); }
+.small { font-size: 8.5pt; }
+.eyebrow { font-family: var(--fm); font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+code { font-family: var(--fm); font-size: 8.5pt; background: var(--track); padding: 0 3pt; border-radius: 3pt; }
+table { border-collapse: collapse; width: 100%; font-size: 8.5pt; break-inside: auto; }
+tr { break-inside: avoid; }
+th, td { padding: 3.5pt 5pt; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; white-space: normal; }
+th { color: var(--muted); font-weight: 600; font-size: 7.8pt; }
+td { font-family: var(--fm); font-variant-numeric: tabular-nums; }
+td:first-child { font-family: var(--fb); }
+table.wrap td, table.wrap th { white-space: normal; text-align: left; font-family: var(--fb); }
+table.tight td, table.tight th { padding-top: 2pt; padding-bottom: 2pt; }
+td.good { color: var(--good); } td.warn { color: var(--warn); font-weight: 600; } td.bad { color: var(--bad); font-weight: 600; }
+.cover { min-height: 245mm; display: flex; flex-direction: column; justify-content: space-between; gap: 18pt; }
+.cover-top { display: flex; flex-direction: column; gap: 12pt; padding-top: 30mm; }
+.cover .lead { font-size: 12.5pt; max-width: 150mm; color: var(--muted); }
+.verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; }
+.verdict { border: 1px solid var(--rule); border-radius: 6pt; padding: 8pt 10pt; display: flex; flex-direction: column; gap: 3pt; break-inside: avoid; }
+.pill { font-family: var(--fm); font-size: 7.5pt; font-weight: 500; padding: 1pt 6pt; border-radius: 99pt; align-self: flex-start; }
+.pill.good { color: var(--good); background: var(--good-bg); } .pill.warn { color: var(--warn); background: var(--warn-bg); } .pill.bad { color: var(--bad); background: var(--bad-bg); }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 4pt; font-size: 8pt; break-inside: avoid; }
+.flow .st { border: 1px solid var(--rule); background: var(--panel); border-radius: 5pt; padding: 5pt 7pt; display: flex; flex-direction: column; gap: 1pt; min-width: 0; flex: 1 1 0; }
+.flow .st b { font-family: var(--fd); font-size: 8.5pt; }
+.flow .st.hl { border-color: var(--accent); background: #e9f1fc; }
+.flow .st.shared { border-style: dashed; }
+.flow .ar { align-self: center; color: var(--muted); font-family: var(--fm); }
+.box { border: 1px solid var(--rule); border-radius: 6pt; padding: 9pt 11pt; display: flex; flex-direction: column; gap: 6pt; break-inside: avoid; background: #fff; }
+.box.note { background: var(--panel); }
+ul, ol { margin: 0; padding-left: 14pt; display: flex; flex-direction: column; gap: 3pt; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10pt; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 3pt; break-inside: avoid; }
+figure img { width: 100%; border: 1px solid var(--rule); border-radius: 4pt; }
+figcaption { font-size: 8pt; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 3pt 12pt; font-size: 8pt; color: var(--muted); }
+.sw { width: 8pt; height: 8pt; border-radius: 2pt; display: inline-block; margin-right: 4pt; vertical-align: -1pt; }
+.bgroup { display: flex; flex-direction: column; gap: 2.5pt; break-inside: avoid; margin-bottom: 6pt; }
+.btitle { font-weight: 600; font-size: 8.8pt; }
+.brow { display: grid; grid-template-columns: 42mm 1fr 13mm; gap: 6pt; align-items: center; font-size: 8pt; }
+.blbl { color: var(--muted); }
+.btrack { height: 8pt; background: var(--track); border-radius: 0 3pt 3pt 0; display: block; }
+.bbar { height: 100%; display: block; border-radius: 0 3pt 3pt 0; }
+.bval { font-family: var(--fm); text-align: right; }
+.toc { display: flex; flex-direction: column; gap: 3pt; font-size: 10pt; }
+.toc div { display: flex; gap: 8pt; } .toc span:first-child { font-family: var(--fm); color: var(--muted); width: 14pt; }
+</style></head><body>
+
+<div class="cover">
+  <div class="cover-top">
+    <div class="eyebrow">2D → 3D CAD converter · benchmark report · {{DATE}}</div>
+    <h1>Approach 1 vs approach 2:<br>what works, what fails, what is missing</h1>
+    <p class="lead">Two ways of turning 2D architectural DXF plans into a building model, measured on 13 reference drawings and two real drawings, using the real SymPointV2 answers from a GPU run.</p>
+  </div>
+  <div class="verdicts">
+    <div class="verdict"><span class="pill good">Works</span><b>Clean drawings with good layers</b><span class="muted small">Approach 2 matches or beats approach 1 on 9 of 13 reference drawings and adds none of approach 1's false walls along furniture.</span></div>
+    <div class="verdict"><span class="pill bad">Fails</span><b>Single-line and wide-polyline walls</b><span class="muted small">The model leaves 74–77% of these wall lines unlabelled. Drawing 11 scores 0.00; drawing 13 survives only through layer names.</span></div>
+    <div class="verdict"><span class="pill bad">Fails</span><b>Windows on real drawings</b><span class="muted small">Real apartment: 30% of windows found. Permit set: 96% of glazing lines get no label.</span></div>
+    <div class="verdict"><span class="pill warn">Fragile</span><b>The rules lean on layer names</b><span class="muted small">Room recall drops from 0.99 to 0.83 without layer names. Filling the model's gaps with approach 1 restores 0.99.</span></div>
+  </div>
+  <div class="toc">
+    <div><span>1</span><span>How the two approaches work</span></div>
+    <div><span>2</span><span>Test set and method</span></div>
+    <div><span>3</span><span>First benchmark: simulated model answers</span></div>
+    <div><span>4</span><span>Real GPU results</span></div>
+    <div><span>5</span><span>Real drawings</span></div>
+    <div><span>6</span><span>What is missing, ranked</span></div>
+    <div><span>7</span><span>Limits of this report</span></div>
+    <div><span>A</span><span>Appendix: per-drawing scores and how to reproduce</span></div>
+  </div>
+</div>
+
+<!-- 1 -->
+<div class="page">
+<section>
+  <h2>1 · How the two approaches work</h2>
+  <p>Both approaches read the same DXF, normalise it the same way and finish with the same build stages (walls → rooms → classification → validation → 3D). They differ in one step: how lines become walls, doors and windows. Approach 1 decides with geometry and rules. Approach 2 asks a trained model, SymPointV2, what every line is.</p>
+
+  <h3>Approach 1: geometry, topology and rules (<code>architectural_converter/</code>)</h3>
+  <div class="flow">
+    <div class="st shared"><b>Ingest</b>DXF (DWG via ODA); blocks expanded with full transforms</div><span class="ar">→</span>
+    <div class="st shared"><b>Preprocess</b>units from geometry, normalise to metres, adaptive tolerances, duplicates, strokes</div><span class="ar">→</span>
+    <div class="st hl"><b>Context</b>layer names scored by keyword tables; every block given a role</div><span class="ar">→</span>
+    <div class="st hl"><b>Detectors</b>5 wall detectors + doors, windows, columns, stairs</div><span class="ar">→</span>
+    <div class="st hl"><b>Resolve</b>merge candidates, weigh evidence, accept / review / reject</div>
+  </div>
+  <ul>
+    <li><b>Wall detectors.</b> Parallel line pairs at a plausible distance (the main one), closed thin polylines, wide polylines and MLINEs, wall-fill hatches, single centre lines (supported by layer and network), and layer evidence attached to geometric walls.</li>
+    <li><b>Doors</b> come from a swing arc plus a leaf line, in blocks or loose geometry. <b>Windows</b> come from window symbols, glazing line groups inside a wall band, or lines that interrupt a wall band. <b>Columns</b> are compact closed or filled shapes. <b>Stairs</b> are runs of regularly spaced parallel treads.</li>
+    <li><b>Resolver.</b> Each candidate gets a confidence from weighted evidence (thickness class, layer, hatch, dimension, topology). ACCEPTED at 0.68 or above, NEEDS_REVIEW at 0.45 or above, otherwise REJECTED. Every decision keeps its evidence and source DXF entities.</li>
+    <li><b>Strengths:</b> handles any wall drawing style it has a detector for, and works without layer names (benchmark drawing 09). <b>Weaknesses:</b> furniture drawn as parallel lines can pair into walls, and kitchen counters trigger missing-wall guesses.</li>
+  </ul>
+
+  <h3>Approach 2: SymPointV2 labels (<code>sympoint_converter/</code>)</h3>
+  <div class="flow">
+    <div class="st shared"><b>Ingest + preprocess</b>shared with approach 1</div><span class="ar">→</span>
+    <div class="st hl"><b>Tiles</b>drawing cut into 20 m tiles (4 m overlap), sent to the GPU service</div><span class="ar">→</span>
+    <div class="st hl"><b>SymPointV2</b>a class for every line, arc and circle (35 FloorPlanCAD classes)</div><span class="ar">→</span>
+    <div class="st hl"><b>Rules on labels</b>label consensus by entity, block and layer</div><span class="ar">→</span>
+    <div class="st hl"><b>extract.py</b>walls, doors, windows, columns, stairs built from the labels</div>
+  </div>
+  <ul>
+    <li><b>The model</b> was trained on FloorPlanCAD (crops of apartment and office plans). It answers line by line and tile by tile, so its answer is locally noisy. It runs in a local GPU service, and answers are cached per drawing.</li>
+    <li><b>Building from labels.</b> Two parallel wall-labelled lines 4–90 cm apart form a wall. Short closed pieces become columns or wall nibs. Door-labelled clusters split by their swing arcs become doors. Window, bay window and curtain-wall labels become windows along the nearest wall. Stair-labelled lines become flights, and railing lines become balcony parapets.</li>
+    <li><b>The rules ("guidelines").</b> <i>Label consensus</i>: one entity is one object, a block inserted many times is one kind of object, and a layer holds one kind of thing. Where the model is silent, the layer name gives a weak label. <i>Room names</i>: a room holding two kinds of name is missing a wall. <i>Wall structure</i>: wall groups that enclose nothing and host no door or window are rejected. <i>Enclosed floors</i>: an area mostly surrounded by building gets a floor.</li>
+    <li><b>Strengths:</b> tells furniture from walls well, so it adds no false walls along counters and wardrobes. <b>Weaknesses:</b> anything drawn unlike FloorPlanCAD (single-line walls, wide polylines, real-world glazing) goes unlabelled, and the rules fill those gaps mostly from layer names.</li>
+  </ul>
+
+  <h3>Proposed hybrid: approach 2 with an approach-1 fallback (experiment)</h3>
+  <div class="flow">
+    <div class="st"><b>Approach 1</b>run once; its accepted walls, doors and windows list their source lines</div><span class="ar">→</span>
+    <div class="st hl"><b>Fill the gaps</b>a line the model left unlabelled takes approach 1's class (score 0.6)</div><span class="ar">→</span>
+    <div class="st"><b>Approach 2 build</b>unchanged: rules, extraction, rooms, 3D</div>
+  </div>
+  <p class="small muted">The model's confident answers are never overridden. Only lines it was silent about get approach 1's opinion. Today this lives in the analysis scripts, not in the product.</p>
+</section>
+</div>
+
+<!-- 2 -->
+<div class="flowpage">
+<section>
+  <h2>2 · Test set and method</h2>
+  <table class="wrap">
+    <thead><tr><th>Set</th><th>Drawings</th><th>Reference answers</th><th>Used for</th></tr></thead>
+    <tbody>
+      <tr><td>Benchmark (synthetic)</td><td>13: apartment, multi-unit, commercial with column grid, office, hotel with nested blocks, irregular, diagonal and curved, fragmented, everything on layer 0, blocks and hatches, single-line walls, MLINE, wide polylines</td><td>exact geometry</td><td>all scores</td></tr>
+      <tr><td>Real apartment plan</td><td>apartment-building-plan.dxf (one storey, 8 flats)</td><td>doors and windows from the drawing's own door blocks and window layer</td><td>door and window scores, visual checks</td></tr>
+      <tr><td>Real permit set</td><td>SNOOBAR_545_Permit.dxf (7 storeys side by side, site, sections)</td><td>none yet</td><td>error checks (duplicates, oversize rooms), visual checks</td></tr>
+    </tbody>
+  </table>
+  <div class="box note">
+    <b>Metrics</b>
+    <ul class="small">
+      <li><b>Walls:</b> length-based. Centre lines are sampled every 5 cm; a sample is correct within max(0.6 × thickness, 8 cm) of a reference axis running the same direction. Precision = correct share of detected length, recall = found share of reference length.</li>
+      <li><b>Rooms:</b> matched at intersection-over-union ≥ 0.5. <b>Doors, windows, columns:</b> matched by centre distance (doors and windows within max(half the width, 0.3 m)).</li>
+      <li><b>Fixes per drawing:</b> false and missed walls, rooms, doors, windows and columns added up; the manual corrections a user would make.</li>
+      <li>Items marked NEEDS_REVIEW count as detected.</li>
+      <li><b>Line-level label accuracy</b> (section 4.1): share of each class's line length the model labelled correctly, before any rule runs. The true class comes from the drawing's layer.</li>
+    </ul>
+  </div>
+  <div class="box note">
+    <b>Validation of the pipeline used here</b>
+    <p class="small">The GPU run saved the model's raw answer for every drawing. Rebuilding approach 2 from those answers on a CPU-only machine reproduced the GPU report's scores exactly on all 13 benchmark drawings. All variants in this report (rules off, no layer names, fallback) start from those same saved answers.</p>
+  </div>
+
+  <h2>3 · First benchmark: simulated model answers</h2>
+  <p>Before the GPU run, approach 2 was tested with perfect labels taken from the benchmark's layer names, then damaged at the error rates the project README describes (12.5% of wall lines and 65% of window lines unlabelled, 8% of tiles blank, 25% of furniture and 15% of door lines called wall, 3% stray wall labels). Three random seeds, mean over 12 drawings (09 has no usable layers for the simulated model). <b>Section 4 replaces these numbers with real ones;</b> they are kept because they first showed the layer-name dependence.</p>
+  <h3>3.1 Drawings with their original layer names</h3>
+  {{SIM_A}}
+  <h3>3.2 Same drawings, every layer renamed to 0</h3>
+  {{SIM_B}}
+  <p class="small muted">Approach 1 needs no layer names (0.99 room recall either way). Approach 2's rules recover the damage fully with layer names and only partly without them. The fallback closes most of that gap. Caveat: on these drawings approach 1 is near-perfect, so the fallback got near-perfect help; on real drawings the gain is smaller (section 5).</p>
+</section>
+</div>
+
+<!-- 4 -->
+<div class="page">
+<section>
+  <h2>4 · Real GPU results</h2>
+  <h3>4.1 What the model gets right, line by line</h3>
+  <div class="legend"><span><i class="sw" style="background:#257de0"></i>12 synthetic drawings</span><span><i class="sw" style="background:#f47230"></i>Real apartment</span><span><i class="sw" style="background:#00b894"></i>Real permit set</span></div>
+  {{LAB_BARS}}
+  <p class="small muted">Apartment windows: the lines on layer <code>winows</code> are frames, which the model calls railing (80%). The glass lines sit on layer <code>Profile</code>, where the model says curtain wall (85%), and approach 2 builds curtain wall as windows. "Non-architectural" covers grids, area outlines, roads, sections and similar layers.</p>
+  <h3>4.2 Biggest error sources on the permit set</h3>
+  <table>
+    <thead><tr><th>Layer</th><th>Length</th><th>Content</th><th>Model's answer</th></tr></thead>
+    <tbody>
+      <tr><td>A-WALL-BLWO</td><td>15,069 m</td><td>walls</td><td class="warn">wall 54%, none 28%, stairs 8%</td></tr>
+      <tr><td>A-AREA-IDEN</td><td>10,979 m</td><td>room-area outlines</td><td class="bad">railing 39%, wall 32%</td></tr>
+      <tr><td>A-DOOR</td><td>6,890 m</td><td>doors</td><td class="warn">door 77%, none 13%</td></tr>
+      <tr><td>L-Structure</td><td>2,458 m</td><td>structural walls</td><td class="good">wall 92%</td></tr>
+      <tr><td>22-1-14-ROAD P2PFGC</td><td>1,878 m</td><td>road</td><td class="bad">wall 79%</td></tr>
+      <tr><td>XREF-W09-A-ELEV04 … SECT-TILE</td><td>1,275 m</td><td>section drawing</td><td class="bad">wall 54%</td></tr>
+      <tr><td>A--GLAZ</td><td>1,098 m</td><td>glazing</td><td class="bad">none 96%</td></tr>
+    </tbody>
+  </table>
+</section>
+</div>
+
+<div class="page">
+<section>
+  <h3>4.3 How far the simulation was from reality</h3>
+  <table>
+    <thead><tr><th>Error</th><th>Simulated</th><th>Real, synthetic</th><th>Real, apartment</th><th>Real, permit set</th></tr></thead>
+    <tbody>{{SIMPROF}}</tbody>
+  </table>
+  <p class="small muted">The real model is much better than simulated on clean, FloorPlanCAD-like drawings and much worse on the permit set, where real glazing and site linework look nothing like its training data.</p>
+  <h3>4.4 Built-model scores on the benchmark (real model answers)</h3>
+  <p>Mean over {{N_REAL}} drawings: 09 (no layers) and 11 (single-line walls) are left out because no approach-2 variant without the fallback builds anything on 11. Per-drawing scores are in the appendix.</p>
+  {{REAL_T}}
+  <div class="legend"><span><i class="sw" style="background:#257de0"></i>Model only</span><span><i class="sw" style="background:#f47230"></i>Model + rules (as shipped)</span><span><i class="sw" style="background:#00b894"></i>Model + rules, no layer names</span><span><i class="sw" style="background:#f2a600"></i>Model + rules + fallback, no layer names</span></div>
+  {{RULE_BARS}}
+  <div class="box note small">
+    <b>Reading it</b>
+    <ul>
+      <li>The rules lift room recall from 0.83 to 0.99, but with layer names removed they add nothing (0.83). Their benefit on these drawings comes from layer names.</li>
+      <li>The fallback recovers 0.99 room recall without any layer names.</li>
+      <li>Drawing 11: the fallback lifts room recall from 0.00 to 0.50. The model labels 22% of those wall lines as furniture with confidence, and the fallback only fills lines the model leaves blank.</li>
+      <li>Drawing 10: approach 2 misses every column (column recall 0.00); SymPointV2 has no column class.</li>
+    </ul>
+  </div>
+</section>
+</div>
+
+<!-- 5 -->
+<div class="page">
+<section>
+  <h2>5 · Real drawings</h2>
+  <h3>5.1 Apartment plan</h3>
+  <p>Doors scored against the 40 door blocks in the DXF; windows against the 20 window groups on layer <code>winows</code>. Rooms are counts; there is no room reference yet.</p>
+  <table>
+    <thead><tr><th></th><th>Doors found</th><th>Door P</th><th>Door R</th><th>Windows found</th><th>Window R</th><th>Rooms</th></tr></thead>
+    <tbody>{{APT_T}}</tbody>
+  </table>
+  <div class="legend"><span><i class="sw" style="background:#257de0"></i>Approach 1</span><span><i class="sw" style="background:#f47230"></i>Approach 2 (as shipped)</span><span><i class="sw" style="background:#00b894"></i>Approach 2 + fallback</span></div>
+  {{APT_BARS}}
+  <div class="two">
+    <figure>{{IMG_APT_A1}}<figcaption>Approach 1: all 20 windows; corner and bottom balconies become rooms; kitchen counters trigger missing-wall guesses.</figcaption></figure>
+    <figure>{{IMG_APT_A2}}<figcaption>Approach 2: walls run straight through most windows; four corner and two bottom balconies never become rooms.</figcaption></figure>
+  </div>
+</section>
+</div>
+
+<div class="page">
+<section>
+  <figure style="max-width:120mm">{{IMG_APT_FB}}<figcaption>Approach 2 + fallback on the apartment: 19 of 20 windows return; the balconies are still missing.</figcaption></figure>
+  <h3>5.2 Permit set, ground floor</h3>
+  <p>No reference answers yet, so this checks for results that are clearly wrong.</p>
+  <table>
+    <thead><tr><th>Ground floor</th><th>Rooms</th><th>Duplicate rooms</th><th>Rooms over 150 m²</th><th>Doors</th><th>Door pairs &lt; 0.6 m apart</th><th>Windows</th></tr></thead>
+    <tbody>
+      <tr><td>Approach 1</td><td>84</td><td class="bad">42</td><td class="bad">4 (site, plot)</td><td>30</td><td>0</td><td>10</td></tr>
+      <tr><td>Approach 2 (as shipped)</td><td>43</td><td class="good">0</td><td class="good">0</td><td>69</td><td class="bad">29</td><td>8</td></tr>
+      <tr><td>Approach 2 + fallback</td><td>41</td><td class="good">0</td><td class="good">0</td><td>63</td><td class="bad">21</td><td>8</td></tr>
+    </tbody>
+  </table>
+  <p class="small muted">Approach 1 creates every ground-floor room twice, so its 558 rooms for the whole building (reported earlier) were inflated. Whole building, approach 2: 227 rooms, 353 doors, 38 windows; with fallback: 215 rooms, 304 doors, 36 windows.</p>
+  <div class="two">
+    <figure>{{IMG_GF_A1}}<figcaption>Approach 1: the site outline becomes a 238 m² room, the terrace a 220 m² balcony, and plot lines become walls.</figcaption></figure>
+    <figure>{{IMG_GF_A2}}<figcaption>Approach 2: clean rooms and the terrace split into four balconies, but doubled door markers and few windows.</figcaption></figure>
+  </div>
+  <p class="small muted">Legend for the plan images: blue = exterior wall, green = interior wall, magenta = wall to review, orange square = door, cyan square = window, red cross = unidentified opening, × = opening to review, yellow fill = room.</p>
+</section>
+</div>
+
+<!-- 6 -->
+<div class="page">
+<section>
+  <h2>6 · What is missing, ranked by payoff</h2>
+  <ol>
+    <li><b>Approach-1 fallback for lines the model leaves unlabelled.</b> The largest measured gain: room recall 0.83 → 0.99 without layer names, apartment windows 0.30 → 0.95, fixes per drawing 5.0 → 2.6. It belongs in <code>sympoint_converter/reasoning/</code>.</li>
+    <li><b>Windows.</b> Wall bands are built straight through window openings, and real glazing lines mostly get no label. A gap in a wall band with glazing-like lines inside should become a window, whatever the label.</li>
+    <li><b>Duplicate doors in approach 2.</b> 29 near-duplicate pairs on one permit-set floor. Doors closer than 0.6 m on the same wall should merge.</li>
+    <li><b>Single-line and wide-polyline walls.</b> The model doesn't recognise them; approach 1 handles both perfectly. Route these drawing styles to approach 1's wall detectors.</li>
+    <li><b>Non-architectural linework labelled wall.</b> Room-area outlines, roads and sections on the permit set. Area-identification and site layers need a veto, and wall groups that enclose nothing should be rejected in more cases.</li>
+    <li><b>Columns in approach 2.</b> SymPointV2 has no column class; benchmark drawing 10 loses all columns.</li>
+    <li><b>Balconies as rooms in approach 2.</b> Balcony outlines labelled wall don't close into rooms (6 missing on the apartment).</li>
+    <li><b>Approach 1 bugs on the permit set.</b> Rooms created twice on stacked storeys; site and plot outlines become rooms and walls.</li>
+    <li><b>Room types.</b> Most apartment rooms are typed only as "room": the drawing has no room names, and geometry-only typing knows just corridor and service room.</li>
+    <li><b>Reference answers for real drawings.</b> Walls and rooms on both real drawings, and doors on the permit set, are still unscored. Every number on real drawings beyond doors and windows is a check, not a measurement.</li>
+  </ol>
+
+  <h2>7 · Limits of this report</h2>
+  <ol class="small">
+    <li>Line-level truth comes from layer names. Layers that mix content (frames on a wall layer, for example) blur the numbers by a few percent.</li>
+    <li>The apartment's door and window truth comes from the same layers approach 1 reads, so approach 1's 1.00 there confirms consistency rather than independent accuracy.</li>
+    <li>Permit-set door accuracy is unknown: its doors aren't drawn as simple swing arcs, so they couldn't be counted reliably from the DXF.</li>
+    <li>The 13 benchmark drawings are synthetic and were used to develop approach 1's rules, so approach 1's near-perfect scores there don't carry over to real drawings.</li>
+    <li>The approach-1 fallback was tested as a label-level experiment, not as production code; its real-drawing gain is measured on one drawing.</li>
+    <li>The first benchmark (section 3) used invented error rates. Section 4.3 shows how far they were from the real model.</li>
+  </ol>
+</section>
+</div>
+
+<!-- appendix -->
+<div class="page">
+<section>
+  <h2>A · Appendix</h2>
+  <h3>A.1 Per-drawing scores from the GPU run</h3>
+  <table class="tight">
+    <thead><tr><th>Drawing</th><th>Approach</th><th>Wall P</th><th>Wall R</th><th>Room P</th><th>Room R</th><th>Door P</th><th>Door R</th><th>Win P</th><th>Win R</th><th>Fixes</th></tr></thead>
+    <tbody>{{APPENDIX}}</tbody>
+  </table>
+  <h3>A.2 How to reproduce</h3>
+  <div class="box note small">
+    <p>On a machine with the SymPointV2 service (branch <code>claude/practical-planck-ugw5wn</code>):</p>
+    <p><code>python -m sympoint_converter label &lt;drawing.dxf&gt; -o gpu_out/</code> for every drawing (saves <code>*.sympoint.response.json</code>), then <code>python -m sympoint_converter compare --benchmark -o gpu_out/</code>.</p>
+    <p>Without a GPU, any build can be repeated from a saved answer: <code>python -m sympoint_converter build &lt;drawing.dxf&gt; --response &lt;name&gt;.sympoint.response.json -o out/</code> (add <code>--no-reasoning</code> to switch the rules off).</p>
+  </div>
+</section>
+</div>
+</body></html>
