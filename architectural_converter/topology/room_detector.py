@@ -72,9 +72,7 @@ def holes_of(solid, grow: float = 0.0, near=None):
             islands = [comps[int(k)] for k in tree.query(hp) if comps[int(k)] is not poly
                        and hp.contains(comps[int(k)].representative_point())]
             if islands:
-                # subtract each island's filled outline: its own holes are rooms already returned by its
-                # own interior rings, and would otherwise be returned a second time from this hole
-                hp = robust_difference(hp, robust_union([Polygon(c.exterior) for c in islands]))
+                hp = robust_difference(hp, robust_union(islands))
             for q in polygons_of(hp):
                 if grow > 0:
                     q = safe_buffer(q, grow, join_style=2)

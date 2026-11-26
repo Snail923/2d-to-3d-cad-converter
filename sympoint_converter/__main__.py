@@ -3,8 +3,7 @@
 The local SymPointV2 service is started automatically in the background when a command needs it
 (and keeps running for the next drawings):
 
-    python -m sympoint_converter build drawing.dxf -o out/           # combined approach -> JSON, SQLite, GLB, report
-                                                                      # (--model-only: SymPointV2 alone)
+    python -m sympoint_converter build drawing.dxf -o out/           # walls/doors/windows -> JSON, SQLite, GLB, report
     python -m sympoint_converter compare drawing.dxf -o out/         # approach 1 vs approach 2, side by side
     python -m sympoint_converter compare --benchmark -o out/         # ... on the 13 benchmark drawings (with scores)
     python -m sympoint_converter label drawing.dxf -o out/           # raw labels viewer (step 1)
@@ -38,8 +37,7 @@ def _cfg(a, **extra):
             "min_label_score": getattr(a, "min_score", None),
             "include_hatch_boundaries": True if getattr(a, "hatches", False) else None,
             "cache_labels": False if getattr(a, "no_cache", False) else None,
-            "use_reasoning": False if getattr(a, "no_reasoning", False) else None,
-            "combined": {"enabled": False} if getattr(a, "model_only", False) else None, **extra}
+            "use_reasoning": False if getattr(a, "no_reasoning", False) else None, **extra}
     if getattr(a, "no_autostart", False):
         over["service"] = {"autostart": False}
     return load_config(over)
@@ -128,7 +126,7 @@ def cmd_build(a):
     from architectural_converter.pipeline.database_exporter import export_json, export_sqlite
     from architectural_converter.visualization.feature_overlay import render_overlay
     from architectural_converter.visualization.validation_viewer import html_report
-    from .combined import CombinedPipeline
+    from .pipeline import SymPointPipeline
     from .viewer import render_html
     cfg = _cfg(a)
     corr = None
@@ -137,7 +135,7 @@ def cmd_build(a):
             corr = json.load(fh)
     ov = {"runtime": {"forced_units": a.units}} if a.units else None
     t0 = time.time()
-    pipe = CombinedPipeline(cfg, engine_overrides=ov, url=a.url, response=_response(a))
+    pipe = SymPointPipeline(cfg, engine_overrides=ov, url=a.url, response=_response(a))
     st = pipe.process(a.input, corrections=corr)
     os.makedirs(a.out, exist_ok=True)
     base = os.path.join(a.out, os.path.splitext(os.path.basename(a.input))[0] + ".sympoint")
@@ -159,8 +157,7 @@ def cmd_build(a):
     from .compare import counts
     c = counts(st.model)
     lg = st.logs["detect"]
-    what = "SymPointV2 + approach 1 (combined)" if lg.get("approach") == "combined" else "SymPointV2 only"
-    print(f"approach 2 ({what}): " + " ".join(f"{k}={v}" for k, v in c.items())
+    print("approach 2 (SymPointV2): " + " ".join(f"{k}={v}" for k, v in c.items())
           + f"  ({time.time() - t0:.1f} s, labels: {lg['labels_source']})")
     from .reasoning import summary
     for name, what in summary(st):
@@ -315,8 +312,6 @@ def main(argv=None):
     b.add_argument("--no-3d", action="store_true")
     b.add_argument("--no-reasoning", action="store_true",
                    help="the model's answer as it is: no label consensus, wall structure, room-name or floor rules")
-    b.add_argument("--model-only", action="store_true",
-                   help="SymPointV2 alone: approach 1's detectors do not fill the model's gaps (combined approach off)")
 
     c = sub.add_parser("compare", help="approach 1 vs approach 2 on the same drawings")
     c.add_argument("inputs", nargs="*")
@@ -324,7 +319,6 @@ def main(argv=None):
     c.add_argument("--tile-m", type=float)
     c.add_argument("--benchmark", action="store_true", help="add the 13 benchmark drawings (scored against references)")
     c.add_argument("--no-reasoning", action="store_true", help="approach 2 without its reasoning modules")
-    c.add_argument("--model-only", action="store_true", help="approach 2 as SymPointV2 alone (combined approach off)")
 
     w = sub.add_parser("web", help="serve the web app with both methods (starts the GPU service, opens the browser)")
     w.add_argument("--port", type=int, default=8000)

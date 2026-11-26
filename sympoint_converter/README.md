@@ -73,7 +73,7 @@ python -m sympoint_converter compare samples/real/apartment-building-plan.dxf -o
 |---|---|---|
 | `compare <dxf> ...` | runs approach 1 and approach 2 on the same drawings | `<name>.compare.html` (tables + both 2D overlays), `.md`, `.json` |
 | `compare --benchmark` | the same on the 13 benchmark drawings, **scored** against their exact references | `benchmark.compare.html` |
-| `build <dxf>` | approach 2 (combined with approach 1, see section 5; `--model-only` for SymPointV2 alone): the full model | `<name>.sympoint.model.json`, `.model.sqlite`, `.glb`, `.report.html`, `.overlay.svg`, labels viewer `.html` |
+| `build <dxf>` | approach 2 only: the full model | `<name>.sympoint.model.json`, `.model.sqlite`, `.glb`, `.report.html`, `.overlay.svg`, labels viewer `.html` |
 | `label <dxf>` | raw labels only (step 1), optionally `--tile-m 15 20 30` | `<name>.sympoint.html` viewer, `.labels.json` |
 | `server status` / `stop` / `start` / `log` | the background service | log in `~/.cache/sympoint_converter/server.log` |
 | `web` | the web app with both methods (see below) | `http://127.0.0.1:8000` |
@@ -161,38 +161,6 @@ whole tiles unlabelled, 25 % of furniture and 15 % of door lines called wall, 3 
 reasoning 67 % of the rooms of the undamaged build are found, with reasoning all of them. The real model's
 errors are not all of this kind (it can be consistently wrong about a whole layer), so check real drawings
 with the checkbox.
-
-## 5. Combined approach: SymPointV2 + approach 1 (`combined.py`, the default)
-
-`build`, `compare` and the web app's approach 2 run the **combined** approach: approach 1's context,
-detectors and resolver run on the same normalised drawing, and their decisions fill what the model
-misses. The model's confident answers are never overwritten; approach 1 speaks where the model is silent,
-where the two disagree on geometry, and where the model cannot answer at all. `--model-only` (CLI) or the
-*combine with approach 1* checkbox (web app) gives SymPointV2 alone.
-
-| step | when | what it does |
-|---|---|---|
-| fill | before label consensus | a line the model left unlabelled takes the class of the accepted approach-1 wall / door / window it belongs to |
-| wall conflicts | after extraction | an approach-2 wall that pairs a face line differently from approach 1 (other thickness or centre line; a door leaf or furniture edge called "wall") is rejected when approach 1's walls span it |
-| walls | after extraction | approach-1 walls where approach 2 built none (only the uncovered stretches), when they attach to the building (within 0.5 m, or in line across an opening) and the model did not confidently call their lines something else; single-line walls only in a single-line drawing |
-| columns | after extraction | approach-1 columns (the model has no column class); after levels, those outside every plan view are rejected |
-| openings | after extraction | an approach-2 opening built from the same lines / block / place as an approach-1 one keeps its geometry only when both agree; otherwise approach 1's geometry and type are used (merged double doors split, misplaced leaves corrected); approach-1 openings where approach 2 has none are added unless the model calls their lines wall / furniture |
-| duplicates | after extraction, after gap typing, before classification | openings of one type closer than 0.4 m are one opening (the approach-1-backed one is kept) |
-| unsupported doors | before classification | an approach-2 door with no gap in its wall, no approach-1 door near it and a weak model answer (one line, mean score below 0.75) is rejected |
-| agreement | | a window both found gets `approaches_agree` evidence, which the window plausibility rule counts as strong (it is not re-typed as a closet door) |
-
-Measured with the real model's answers (GPU run of 25 Nov 2026, `tests/sympoint/real_answers/`):
-
-| | benchmark: corrections per drawing (13) | real apartment: doors P / R | windows P / R | rooms |
-|---|---|---|---|---|
-| approach 1 | 0.31 | 0.98 / 1.00 | 0.95 / 1.00 | 40 |
-| SymPointV2 + reasoning | 4.7 | 0.89 / 0.97 | 1.00 / 0.30 | 33 |
-| **combined** | **0.08** (12 drawings perfect) | **0.98 / 1.00** | **1.00 / 1.00** | 41 |
-
-Every step is counted in `logs["detect"]["combined"]` and shown in the web app's reasoning table; each
-added or replaced element names its source in `detection_methods` (`approach1_wall`, `approach1_geometry`,
-...) and its notes. Settings: `combined` in `config.json`. The cost is approach 1's detection on top of
-approach 2 (benchmark drawings: about 1 s more; the 7-storey permit set: several minutes).
 
 ## Step 1 checks (`label` viewer)
 

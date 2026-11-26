@@ -275,7 +275,6 @@ class OpeningReconstructor:
                 _, w, a, b = best
                 self._host(o, w, a, b, 0.5, None, False)
                 o.notes.append("hosted on continuous wall (no gap drawn)")
-                o.evidence["hosted_without_gap"] = 1.0
                 self.log["hosted_on_continuous_wall"] += 1
             else:
                 self.log["unhosted"] += 1

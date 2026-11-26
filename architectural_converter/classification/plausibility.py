@@ -21,10 +21,8 @@ from ..models.base_entity import Status
 from ..geometry.geometric_utils import safe_buffer as _sbuf
 
 # a window *symbol* recognised by geometry alone is not strong evidence: furniture blocks have
-# the same signature (equal parallel lines). Names and layers that say "window" are, and so is the
-# combined approach's ``approaches_agree`` (the learned model and approach 1's geometry independently
-# found a window at the same place; approach 1 alone never sets it).
-STRONG_WINDOW_EVIDENCE = ("name_hint", "layer_match", "approaches_agree")
+# the same signature (equal parallel lines). Only names and layers that say "window" are.
+STRONG_WINDOW_EVIDENCE = ("name_hint", "layer_match")
 
 
 def band_share(o, host, tol) -> float | None:
