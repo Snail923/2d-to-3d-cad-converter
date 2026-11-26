@@ -297,6 +297,10 @@ export class Editor3D {
     const lv = (model.building && model.building.stacked) ? model.building.levels.filter((l) => l.kind === "floor_plan") : [];
     this.levelRank = new Map(lv.sort((a, b) => a.z - b.z).map((l, i) => [l.id, i]));
     this.levels = lv.map((l) => ({ id: l.id, name: l.name, z: l.z || 0 }));
+    // storey offsets (plan shift + height) that stack a floor plan onto the reference floor
+    this.levelOff = new Map(((model.building && model.building.levels) || []).filter((l) => l.translation || l.z)
+      .map((l) => [l.id, [(l.translation || [0, 0])[0], (l.translation || [0, 0])[1], l.z || 0]]));
+    this.stacked = !!(mesh.metadata && mesh.metadata.stacked_in_3d);
     for (const m of mesh.meshes) {
       const p = m.params, base = { id: m.id, type: m.type, cls: m.classification, color: m.color, level: m.level ?? levelOf.get(m.id), review: review.has(m.id) };
       if (p && p.kind === "glass_of") continue;            // rebuilt with its wall
@@ -323,6 +327,35 @@ export class Editor3D {
     this.drawGrid();
     this.resize();
     this.refreshUi();
+  }
+
+  // Stack the storeys at their levels, or lay them side by side as drawn, keeping every edit: each element
+  // of a storey (also the ones drawn here) moves by that storey's offset, in the scene and in the undo history.
+  setStacked(on) {
+    if (on === this.stacked || !this.levelOff || !this.levelOff.size) return false;
+    const sg = on ? 1 : -1;
+    const shift = (el) => {
+      const off = this.levelOff.get(el.level);
+      if (!off) return;
+      const [dx, dy, dz] = off.map((v) => v * sg);
+      if (el.kind === "mesh") el.matrix = new THREE.Matrix4().makeTranslation(dx, dy, dz).multiply(new THREE.Matrix4().fromArray(el.matrix)).toArray();
+      else { mapPoints(el, (p) => [p[0] + dx, p[1] + dy]); el.z0 += dz; if (el.z1 !== undefined) el.z1 += dz; }
+    };
+    this.endMode(true);
+    for (const el of this.els.values()) shift(el);
+    for (const st of [this.undoStack, this.redoStack]) for (const u of st) u.snap.forEach(shift);
+    for (const l of this.levels || []) l.z = on ? (this.levelOff.get(l.id) || [0, 0, 0])[2] : 0;
+    this.stacked = on;
+    for (const id of this.els.keys()) this.buildObj(id);
+    const b = new THREE.Box3();
+    for (const g of this.objs.values()) b.expandByObject(g);
+    if (!b.isEmpty()) {
+      const lo = this.toModel(b.min), hi = this.toModel(b.max);
+      this.bounds = [[Math.min(lo.x, hi.x), Math.min(lo.y, hi.y), Math.min(lo.z, hi.z)], [Math.max(lo.x, hi.x), Math.max(lo.y, hi.y), Math.max(lo.z, hi.z)]];
+      this.frame(...this.bounds); this.drawGrid();
+    }
+    this.say(on ? "Storeys stacked at their levels (edits kept)" : "Storeys laid side by side as drawn (edits kept)");
+    return true;
   }
 
   frame(lo, hi) {

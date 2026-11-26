@@ -1182,6 +1182,8 @@ $("#levels3d").addEventListener("change", (e) => viewer3d.setVisible("maxLevel",
 $("#show3dGlass").addEventListener("change", (e) => viewer3d.setVisible("window", e.target.checked));
 $("#stack3d").addEventListener("change", async (e) => {
   if (!S.model || S.busy) return;
+  // an edited 3D scene is re-arranged in place (instant, edits kept) instead of being rebuilt by Python
+  if (viewer3d.dirty && viewer3d.setStacked && viewer3d.setStacked(e.target.checked)) return;
   S.busy = true;
   startJob(e.target.checked ? "Stacking the floors at their levels…" : "Laying the floors side by side as drawn…", false);
   try {
