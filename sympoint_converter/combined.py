@@ -414,9 +414,12 @@ class CombinedPipeline(SymPointPipeline):
             return False
 
         added, cands = 0, []
-        acc = [w for w in a1.walls if w.status == Status.ACCEPTED and not w.is_hypothesis]
-        tot_len = sum(w.length for w in acc) or 1.0
-        single_line_drawing = sum(w.length for w in acc if w.kind == "centerline") / tot_len >= float(c["single_line_share"])
+        # drawing convention from approach 2's own walls: it builds single-line walls only where a wall line has
+        # no second face (approach 1's resolve-stage walls include long site and sheet lines, which would skew it)
+        own = [w for w in live if w.kind in ("straight", "centerline")]
+        tot_len = sum(w.length for w in own)
+        single_line_drawing = tot_len > 0 and \
+            sum(w.length for w in own if w.kind == "centerline") / tot_len >= float(c["single_line_share"])
         self._skipped_single = 0
         for w in a1.walls:
             if w.status != Status.ACCEPTED or w.is_hypothesis or self._model_says_other(st, w, c):
