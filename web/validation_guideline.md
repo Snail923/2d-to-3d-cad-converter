@@ -13,6 +13,53 @@ You check ONE room of an automatic 2D→3D reading of an architectural floor pla
 Compare the result with the reference and with architectural logic. Propose edits only where the result is
 wrong. Never invent elements that the reference drawing does not show.
 
+## How elements are drawn in a CAD floor plan (read the reference with this)
+
+A floor plan is a horizontal cut through the building at about 1 m height, seen from above. Everything is
+drawn with lines; nothing is coloured in the reference.
+
+- **Wall** — two long parallel lines 7–50 cm apart (the two faces), often with hatching or a fill between them.
+  Exterior walls are the thickest (20–50 cm) and form the outer boundary; interior walls are thinner
+  (7–25 cm). A wall is continuous: where its two lines stop, there is an opening.
+- **Window** — sits INSIDE an exterior wall: the two wall-face lines stop and are replaced, over the window's
+  width (usually 0.6–2.5 m), by 2–4 thin parallel lines running along the wall (the frame and glass), often with
+  short lines across the wall at both ends (the jambs). It looks like the wall became "thin and striped". No arc.
+  A window never gives access to a room.
+- **Door (hinged)** — a gap in a wall (0.7–1.0 m, entrance doors up to 1.2 m) with a straight line (the door leaf,
+  as long as the gap is wide) standing at an angle to the wall from one jamb, and a quarter-circle ARC from the
+  leaf's tip back to the other jamb (the swing). The arc is on the side the door opens into.
+- **Double door** — two leaves and two arcs meeting in the middle of a wider gap (1.2–2 m).
+- **Sliding / pocket door** — a gap with one or two straight lines parallel to the wall, slightly offset,
+  overlapping; no arc. Wardrobes use the same symbol (zig-zag or parallel lines across a niche).
+- **Folding / garage door** — a wide gap (2.4–5 m) in an exterior wall, drawn with a dashed line, a thin line
+  across the gap, or a zig-zag; a car symbol or a driveway is usually in front of it.
+- **Open passage** — a gap in a wall with no leaf, no arc and no glass lines: the wall's two face lines simply end
+  on both sides (short jamb lines across the wall).
+- **Curtain wall / glazed front** — a long run of thin parallel lines with regular cross-ticks (mullions), in
+  place of an exterior wall.
+- **Balcony railing / parapet** — a single line or a thin double line (5–15 cm) at the outer edge of a balcony or
+  terrace; much thinner than the facade wall.
+- **Stairs** — a series of equally spaced parallel lines (treads, 25–32 cm apart), usually with an arrow and
+  "UP"/"DN", sometimes a diagonal break line. Treads are never walls.
+- **Column** — a small filled or hatched square or circle (20–60 cm), often on grid lines.
+- **Furniture and fixtures** — closed shapes INSIDE rooms, not touching both wall faces: beds (rectangle with
+  pillows), sofas, tables with chairs, wardrobes (long rectangle with hangers or diagonal lines), kitchen counters
+  (long band 60 cm deep along a wall, with sink and stove circles), toilets (oval), baths (rounded rectangle),
+  showers (square with a cross or a corner arc), cars. Furniture is never a wall, a door or a window, even when it
+  is drawn with parallel lines.
+- **Annotations** — texts (room names, areas), dimension lines with ticks and numbers, grid lines with circled
+  letters or numbers, level marks. They are not building elements.
+
+How to tell look-alikes apart:
+- window vs wall: a window has 3–4 lines between the wall faces over a short length; a wall has 2 lines (or 2 with
+  hatching) along its whole length;
+- window vs sliding door: a window is in an exterior wall and stays inside the wall thickness; a sliding door is in
+  an interior wall or closes a niche (wardrobe);
+- door vs open passage: a door has a leaf line and an arc; a passage has neither;
+- wall vs counter / wardrobe: a counter or wardrobe is about 60 cm deep, stands against a wall and contains
+  fixtures (sink, stove, hangers); a wall separates two spaces;
+- railing vs exterior wall: a railing is much thinner and borders an outdoor space (balcony, terrace, stair well).
+
 ## Rules to check
 
 1. **Access.** Every room needs at least one door or open passage to a neighbouring room or to the outside.
