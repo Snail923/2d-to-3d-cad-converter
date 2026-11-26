@@ -140,3 +140,28 @@ h3 { margin: 14px 0 6px; font-size: 15px; }
 table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { color: #c62828; }
 .legendrow { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 2px 0; }
 .legendrow i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* 3D editor overlay (web/editor3d.js) */
+.ed3d canvas { outline: none; display: block; }
+.ed3d-shelf { position: absolute; left: 8px; top: 8px; display: flex; flex-direction: column; gap: 3px; z-index: 5; }
+.ed3d-tool { font: 12px system-ui, sans-serif; padding: 4px 6px; min-width: 62px; display: flex; justify-content: space-between; gap: 6px;
+  background: rgba(255,255,255,.92); border: 1px solid #c9ced8; border-radius: 4px; cursor: pointer; color: #1f2430; }
+.ed3d-tool:hover { border-color: #6c8fd6; }
+.ed3d-tool.on { background: #ffe2c7; border-color: #ff7a1a; }
+.ed3d-tool kbd, .ed3d-help kbd { font: 10px ui-monospace, monospace; color: #5b6475; background: #eef1f6; border-radius: 3px; padding: 0 3px; }
+.ed3d-gap { height: 6px; }
+.ed3d-status { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 10px; font: 12px system-ui, sans-serif; color: #2b3240;
+  background: rgba(255,255,255,.9); border-top: 1px solid #d5dae2; z-index: 5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ed3d-status[data-live="1"] { background: #fff4e8; }
+.ed3d-panel { position: absolute; right: 8px; top: 8px; z-index: 6; background: rgba(255,255,255,.96); border: 1px solid #c9ced8; border-radius: 6px;
+  padding: 8px 10px; font: 12px system-ui, sans-serif; max-height: calc(100% - 50px); overflow: auto; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.ed3d-props { width: 230px; }
+.ed3d-help, .ed3d-settings { left: 50%; right: auto; transform: translateX(-50%); width: min(760px, 92%); }
+.ed3d-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 3px 0; }
+.ed3d-row input[type=number] { width: 80px; }
+.ed3d-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.ed3d-key { min-width: 90px; font: 11px ui-monospace, monospace; }
+.ed3d-io { position: absolute; right: 8px; bottom: 30px; display: flex; gap: 4px; z-index: 5; }
+.ed3d-io-btn { font: 11px system-ui, sans-serif; padding: 3px 6px; background: rgba(255,255,255,.92); border: 1px solid #c9ced8; border-radius: 4px; cursor: pointer; }
+.ed3d .muted { color: #6b7385; }
+.ed3d table td { padding: 1px 6px; }

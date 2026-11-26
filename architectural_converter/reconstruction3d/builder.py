@@ -25,11 +25,15 @@ class Model3D:
         self.meshes: list[dict[str, Any]] = []
         self.metadata: dict[str, Any] = {"defaults_used": {}}
 
-    def add(self, mid, mtype, cls, V, F, color):
+    def add(self, mid, mtype, cls, V, F, color, params=None):
+        """``params``: the numbers the mesh was built from (world metres, model z-up), so a client can rebuild
+        and edit the element without this builder: {"kind": "wall", start, end, thickness, z0, height,
+        openings: [{id, type, s0, s1, z0, z1}]} (s along the wall from ``start``), {"kind": "railing", ...},
+        {"kind": "prism", ring, z0, z1} or {"kind": "glass_of", wall}. Meshes without params are fixed shapes."""
         if len(V) == 0 or len(F) == 0:
             return
         self.meshes.append({"id": mid, "type": mtype, "classification": cls, "vertices": np.asarray(V, float),
-                            "faces": np.asarray(F, int), "color": color})
+                            "faces": np.asarray(F, int), "color": color, "params": params})
 
     def default(self, key, value, who):
         self.metadata["defaults_used"].setdefault(key, {"value": value, "elements": []})["elements"].append(who)
@@ -39,7 +43,8 @@ class Model3D:
         return {"metadata": self.metadata,
                 "meshes": [{"id": m["id"], "type": m["type"], "classification": m["classification"],
                             "color": m["color"], "level": m.get("level"), "positions": np.round(m["vertices"], 4).ravel().tolist(),
-                            "indices": m["faces"].ravel().tolist()} for m in self.meshes]}
+                            "indices": m["faces"].ravel().tolist(), **({"params": m["params"]} if m.get("params") else {})}
+                           for m in self.meshes]}
 
     def to_trimesh_scene(self):
         import trimesh
@@ -87,7 +92,7 @@ def build_3d(model: dict, cfg) -> Model3D:
             n = np.array([-u[1], u[0]])
             a, bb = np.array(g["start"], float), np.array(g["end"], float)
             t = w.get("thickness") or out.default("unknown_wall_thickness_m", p2["unknown_wall_thickness_m"], w["id"])
-            _railing(out, w, u, float(a @ n), float(a @ u), float(bb @ u), t, p2)
+            _railing(out, w, u, float(a @ n), float(a @ u), float(bb @ u), t, p2, list(a), list(bb))
             continue
         if w.get("classification") == "railing" and not w.get("height"):
             # balcony railing / parapet: an outdoor edge, not a storey-high wall
@@ -105,7 +110,7 @@ def build_3d(model: dict, cfg) -> Model3D:
             b = np.array(g["end"], float)
             s0, s1 = float(a @ u), float(b @ u)
             c = float(a @ n)
-            voids = []
+            voids, op_params = [], []
             for o in ops.get(w["id"], []):
                 hi = o.get("host_interval")
                 if not hi:
@@ -121,6 +126,8 @@ def build_3d(model: dict, cfg) -> Model3D:
                 else:
                     z0, z1 = 0.0, (o.get("height") or out.default("opening_height_m", p2["opening_height_m"], o["id"]))
                 voids.append((x0, x1, z0, min(z1, H), o))
+                op_params.append({"id": o["id"], "type": o["type"], "s0": round(x0 - s0, 4), "s1": round(x1 - s0, 4),
+                                  "z0": round(z0, 4), "z1": round(min(z1, H), 4)})
             voids.sort(key=lambda v: v[0])
             Vs, Fs = [], []
             cur = s0
@@ -134,22 +141,24 @@ def build_3d(model: dict, cfg) -> Model3D:
                     Vs.append(box(u, c, lo, x1, t, z1, H))
                 if o["type"] == "window":
                     gv, gf = box(u, c, lo, x1, max(0.01, t * 0.1), z0, z1)
-                    out.add(o["id"], "window", o.get("classification"), gv, gf, COLORS["glass"])
+                    out.add(o["id"], "window", o.get("classification"), gv, gf, COLORS["glass"], {"kind": "glass_of", "wall": w["id"]})
                 cur = max(cur, x1)
             if cur < s1:
                 Vs.append(box(u, c, cur, s1, t, 0.0, H))
             V, F = _merge(Vs)
-            out.add(w["id"], "wall", w.get("classification"), V, F, color)
+            out.add(w["id"], "wall", w.get("classification"), V, F, color,
+                    {"kind": "wall", "start": [float(x) for x in a], "end": [float(x) for x in b], "thickness": float(t),
+                     "z0": 0.0, "height": float(H), "openings": op_params})
         else:
             poly = g.get("polygon")
             if poly:
                 V, F = extrude(poly["exterior"], 0.0, H)
-                out.add(w["id"], "wall", w.get("classification"), V, F, color)
+                out.add(w["id"], "wall", w.get("classification"), V, F, color, _prism(poly["exterior"], 0.0, H))
     for col in view["columns"]:
         H = col.get("height") or level_height(col) or out.default("column_height_m", p2["column_height_m"], col["id"])
         if col.get("polygon"):
             V, F = extrude(col["polygon"]["exterior"], 0.0, H)
-            out.add(col["id"], "column", col.get("classification"), V, F, COLORS["column"])
+            out.add(col["id"], "column", col.get("classification"), V, F, COLORS["column"], _prism(col["polygon"]["exterior"], 0.0, H))
     for sf in view.get("stairs", []):
         _stair_mesh(out, sf)
     slab = p2["slab_thickness_m"]
@@ -160,7 +169,8 @@ def build_3d(model: dict, cfg) -> Model3D:
             else:
                 V, F = extrude(r["polygon"]["exterior"], -slab, 0.0)
             out.add(r["id"], "floor", r.get("classification"), V, F,
-                    COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"])
+                    COLORS["balcony"] if r.get("classification") == "balcony" else COLORS["floor"],
+                    _prism(r["polygon"]["exterior"], -slab, 0.0) if r.get("floor_parts") is None else None)
     ground_levels = _ground(out, model, view, p2, levels, stacked)
     if stacked and p2.get("stack_levels", True):
         ground_levels.update(_level_slabs(out, p2, levels))
@@ -178,6 +188,7 @@ def build_3d(model: dict, cfg) -> Model3D:
             tx, ty = lv.get("translation") or (0.0, 0.0)
             m["vertices"] = m["vertices"] + np.array([tx, ty, lv.get("z") or 0.0])
             m["level"] = lv["id"]
+            _shift_params(m.get("params"), tx, ty, lv.get("z") or 0.0)
     allv = np.vstack([m["vertices"] for m in out.meshes]) if out.meshes else np.zeros((1, 3))
     out.metadata["bounds"] = [allv.min(axis=0).round(3).tolist(), allv.max(axis=0).round(3).tolist()]
     out.metadata["counts"] = {k: sum(1 for m in out.meshes if m["type"] == k) for k in ("wall", "window", "column", "floor", "stair", "roof")}
@@ -367,15 +378,16 @@ def _pitched_roofs(out, p2, levels, view, level_of) -> None:
              "tile": {"course_m": tile.get("course_m", 0.35), "thickness_m": tile.get("thickness_m", 0.05)}})
 
 
-def _railing(out, w, u, c, s0, s1, t, p2):
+def _railing(out, w, u, c, s0, s1, t, p2, a=None, b=None):
     """Balcony wall: a low solid parapet with glass above it up to the railing height."""
     top = out.default("railing_height_m", p2.get("railing_height_m", 1.1), w["id"])
     par = min(top, out.default("balcony_parapet_height_m", p2.get("balcony_parapet_height_m", 0.5), w["id"]))
     V, F = box(u, c, s0, s1, t, 0.0, par)
-    out.add(w["id"], "wall", w.get("classification"), V, F, COLORS["railing"])
+    params = {"kind": "railing", "start": a, "end": b, "thickness": t, "z0": 0.0, "parapet": par, "top": top} if a is not None else None
+    out.add(w["id"], "wall", w.get("classification"), V, F, COLORS["railing"], params)
     if top > par:
         gv, gf = box(u, c, s0, s1, max(0.02, t * 0.25), par, top)
-        out.add(w["id"] + "_glass", "window", "balcony_glass", gv, gf, COLORS["glass"])
+        out.add(w["id"] + "_glass", "window", "balcony_glass", gv, gf, COLORS["glass"], {"kind": "glass_of", "wall": w["id"]} if a is not None else None)
 
 
 def _stair_mesh(out, sf):
@@ -399,6 +411,24 @@ def _stair_mesh(out, sf):
         parts.append(extrude(land["exterior"], zl - 0.15, zl))
     V, F = _merge(parts)
     out.add(sf["id"], "stair", "stair", V, F, COLORS["stair"])
+
+
+def _prism(ring, z0, z1) -> dict:
+    return {"kind": "prism", "ring": [[float(x), float(y)] for x, y in (p[:2] for p in ring)], "z0": float(z0), "z1": float(z1)}
+
+
+def _shift_params(p, tx, ty, tz) -> None:
+    """Move an element's params with its vertices (floors stacked at their levels)."""
+    if not p:
+        return
+    for k in ("start", "end"):
+        if p.get(k) is not None:
+            p[k] = [p[k][0] + tx, p[k][1] + ty]
+    if p.get("ring"):
+        p["ring"] = [[x + tx, y + ty] for x, y in p["ring"]]
+    for k in ("z0", "z1"):
+        if p.get(k) is not None:
+            p[k] = p[k] + tz
 
 
 def _merge(parts):

@@ -14,7 +14,7 @@ The page runs the real Python engine in your browser (Pyodide), so your drawings
 | Multi-storey | permit sets with all floors side by side: views are split, floor levels read from "F.F.L" annotations and titles, elevations / sections / duplicate (structural, sanitary) plans excluded, floors aligned and stacked at their real heights |
 | Stairs & rules | straight stair flights (treads are never read as walls; stepped 3D); plausibility rules: windows must sit in a wall, window-like lines in interior partitions become sliding / closet doors to review, rooms without access are flagged |
 | Phase 2 | reference 3D reconstruction (Shapely + Trimesh) from the exported model only → GLB |
-| Review UI | 2D overlay with layer toggles, evidence and source-entity inspection, accept/reject, add wall, connect endpoints, draw room, re-run, 3D viewer, exports |
+| Review UI | 2D overlay with layer toggles, evidence and source-entity inspection, accept/reject, add wall, connect endpoints, draw room, re-run; Blender-style 3D editor (instant edits, customisable keys); exports |
 
 ## Two approaches (kept separate for comparison)
 
@@ -41,6 +41,30 @@ Setup (local NVIDIA GPU, no change to the system CUDA) and usage: [sympoint_conv
 
 DWG files must first be converted to DXF. ODA File Converter is a desktop program, so it can't run in a browser.
 The command line handles DWG automatically when ODA is installed.
+
+### 3D editor (the *3D model* tab)
+
+The 3D view is an editor that works like Blender: changes are rebuilt in the browser in milliseconds
+(0.2 ms to move a wall on the 7-storey permit set), the pipeline is not re-run. Every key can be changed
+(**Keys** / Ctrl+,), together with the navigation style, snapping and the default sizes; the settings are
+kept in the browser and can be exported / imported as JSON. **?** (F1) lists all keys.
+
+| | default key | |
+|---|---|---|
+| navigate | middle drag / Shift+middle / wheel (or Alt+left) | orbit / pan / zoom; *classic* navigation: left orbits, right pans |
+| select | click, Shift+click, A, Alt+A | a door or window is selected by clicking in its opening |
+| move / rotate / scale | G / R / S | X, Y, Z constrain (Z: height); type a number for an exact value; Ctrl toggles snapping; click or Enter confirms, right-click or Esc cancels. A door / window slides along its wall, Z moves its sill; S on a wall with Z changes its height |
+| delete, duplicate | X or Delete, Shift+D | deleting a door / window fills the gap |
+| draw walls | W | click corners (snaps to wall ends and the grid, Shift: 45° steps), Enter / right-click ends |
+| cut a door / window | D / V | point at a wall, a preview follows the mouse, click cuts it |
+| fill a gap | F | a door / window: closes it; two walls in line: one wall; two walls at an angle: both run to their corner; one wall: its end runs to the next wall |
+| floor / roof | P / O | click the outline, Enter finishes; roofs are flat, shed, gable or hip (Tab while drawing) and sit on the walls under them |
+| properties | N | exact numbers of the selection (lengths, thickness, heights, widths, sill, roof pitch...) |
+| undo / redo | Ctrl+Z / Ctrl+Shift+Z | |
+
+**Export GLB** writes the edited scene; **Save scene** / **Open scene** keep the edits as a JSON file to continue
+later. The 3D edits are separate from the 2D corrections: loading or re-running a drawing asks before it
+replaces an edited scene.
 
 ### Enable the GitHub Pages site (one-time)
 

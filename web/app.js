@@ -1,4 +1,4 @@
-import { Viewer3D } from "./viewer3d.js";
+import { Editor3D } from "./editor3d.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (s) => document.querySelector(s);
@@ -687,6 +687,7 @@ svg.addEventListener("click", (ev) => {
 svg.addEventListener("dblclick", (ev) => { if (POLY_TOOLS.has(S.tool)) finishRoom(); });
 window.addEventListener("keydown", (ev) => {
   if (ev.target && /INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
+  if (ev.target && ev.target.closest && ev.target.closest("#view3d")) return;     // the 3D editor has its own keys
   if (ev.key === "Escape") { S.draft = []; S.moveWall = null; drawDraft(null); }
   if (ev.key === "Enter" && POLY_TOOLS.has(S.tool)) finishRoom();
   if ((ev.key === "Delete" || ev.key === "Backspace") && S.selected && S.byId.has(S.selected) && S.model) {
@@ -1155,7 +1156,7 @@ for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
 // acceleration off), the rest of the app keeps working and the 3D tab says why.
 let viewer3d;
 try {
-  viewer3d = new Viewer3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+  viewer3d = new Editor3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
 } catch (e) {
   console.error("3D viewer unavailable:", e);
   viewer3d = { setData() {}, setVisible() {}, highlight() {}, resize() {} };
