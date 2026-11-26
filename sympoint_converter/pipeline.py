@@ -36,10 +36,13 @@ class SymPointPipeline(ExtractionPipeline):
         super().__init__(PipelineConfig(ov), progress)
         self.url, self.response, self.labels_progress = url, response, labels_progress
 
+    def _labels(self, st):
+        """(labels, primitives, request, response, source) of the model; the combined approach overrides this."""
+        return get_labels(st.drawing, st.input_file, self.sp, self.url, self.response, progress=self.labels_progress)
+
     def _stage_detect(self, st):
         t0 = time.perf_counter()
-        labels, prims, req, resp, source = get_labels(st.drawing, st.input_file, self.sp, self.url, self.response,
-                                                      progress=self.labels_progress)
+        labels, prims, req, resp, source = self._labels(st)
         st.timings["detect:sympoint_labels"] = round(time.perf_counter() - t0, 4)
         t0 = time.perf_counter()
         st.sp_labels_model = labels

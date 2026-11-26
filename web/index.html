@@ -19,7 +19,7 @@
     <label class="method" title="How walls, doors and windows are extracted. The rest of the pipeline (reconstruction, rooms, validation, export, 3D) is the same for both.">
       Method <select id="method">
         <option value="rules">Approach 1 · rules (in the browser)</option>
-        <option value="sympoint">Approach 2 · SymPointV2 (local GPU)</option>
+        <option value="sympoint">Approach 2 · SymPointV2 + approach 1 (local GPU)</option>
         <option value="compare">Compare both</option>
       </select>
     </label>
@@ -123,6 +123,7 @@
         <div class="aigrid small"><label>address <input id="spEndpoint" type="text" spellcheck="false"></label>
           <label>tile size (m) <input id="spTile" type="number" step="1" min="5" max="60"></label></div>
         <label class="small" title="Label consensus (blocks, layers, layer names), wall structure, room names, enclosed floors. Switch off to see the model's answer as it is; the drawing is rebuilt from the cached answer, without a new GPU run."><input id="spReasoning" type="checkbox" checked> reasoning on the model's answer</label>
+        <label class="small" title="Approach 1's detectors run too: they label the lines the model leaves blank, add the walls, columns, doors and windows it misses, correct misplaced or merged openings and drop duplicates. Switch off to see SymPointV2 alone; rebuilt from the cached answer, without a new GPU run."><input id="spCombined" type="checkbox" checked> combine with approach 1</label>
         <div class="row"><button id="spTest" class="btn small">Test connection</button></div>
         <div id="spStatus" class="small"></div>
         <div id="spLegend" class="small"></div>

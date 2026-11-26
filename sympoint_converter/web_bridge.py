@@ -18,7 +18,7 @@ from architectural_converter import web_bridge as wb1
 
 from . import load_config
 from .classes import CLASSES, COLORS, GROUP_OF
-from .pipeline import SymPointPipeline
+from .combined import CombinedPipeline
 from .reasoning import summary
 from .sympoint_io import export_tiles, load_drawing
 
@@ -57,7 +57,7 @@ def process(path: str, response_json: str, corrections_json: str | None = None, 
     door rules, ground coverage), like approach 1's safe mode."""
     cfg = _cfg(config_json)               # must be the tiling the response was made for
     resp = json.loads(response_json)
-    pipe = SymPointPipeline(cfg, engine_overrides=SAFE if safe else None, response=resp,
+    pipe = CombinedPipeline(cfg, engine_overrides=SAFE if safe else None, response=resp,
                             progress=wb1._progress, labels_progress=wb1._progress)
     st = pipe.process(path, corrections=json.loads(corrections_json) if corrections_json else None)
     wb1._S.update(pipe=pipe, st=st, cfg=pipe.cfg)

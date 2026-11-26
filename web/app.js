@@ -58,7 +58,7 @@ const S = {
   method: "rules", show: "rules", results: {}, corrByMethod: {}, spAvailable: false, spCache: new Map(), cancelled: false,
 };
 const SP_KEY = "cad2d3d.method";
-const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false, reasoning: true };
+const SPC = { method: "rules", endpoint: "http://127.0.0.1:8790", tile: 20, colour: false, reasoning: true, combined: true };
 try { Object.assign(SPC, JSON.parse(localStorage.getItem(SP_KEY) || "{}")); } catch { /* private mode */ }
 function saveSpc() { try { localStorage.setItem(SP_KEY, JSON.stringify(SPC)); } catch { /* private mode */ } }
 const METHOD_NAME = { rules: "approach 1 (rules)", sympoint: "approach 2 (SymPointV2)" };
@@ -276,7 +276,7 @@ async function runSymPoint(name, buf) {
   S.busy = true; S.cancelled = false;
   startJob(`Approach 2 (SymPointV2): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
   const t0 = performance.now();
-  const config = { tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false };
+  const config = { tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false, combined: { enabled: SPC.combined !== false } };
   const key = `${name}|${buf.byteLength}|${config.tile_m}`;
   try {
     let resp = S.spCache.get(key);
@@ -390,6 +390,14 @@ function initMethodUi() {
   $("#spEndpoint").addEventListener("change", () => { SPC.endpoint = $("#spEndpoint").value.trim(); saveSpc(); });
   $("#spTile").addEventListener("change", () => { SPC.tile = Math.max(5, Math.min(60, +$("#spTile").value || 20)); $("#spTile").value = SPC.tile; saveSpc(); });
   $("#spColour").addEventListener("change", () => { SPC.colour = $("#spColour").checked; saveSpc(); if (S.view) draw2d(true); renderSpLegend(); });
+  $("#spCombined").checked = SPC.combined !== false;
+  $("#spCombined").addEventListener("change", async () => {
+    SPC.combined = $("#spCombined").checked; saveSpc();
+    if (S.fileBytes && !S.busy && S.results.sympoint) {           // rebuild from the cached model answer (no GPU run)
+      delete S.results.sympoint;
+      await applyMethod();
+    }
+  });
   $("#spReasoning").checked = SPC.reasoning !== false;
   $("#spReasoning").addEventListener("change", async () => {
     SPC.reasoning = $("#spReasoning").checked; saveSpc();

@@ -31,6 +31,20 @@ def options(cfg: dict, name: str) -> dict:
 def summary(st) -> list[list[str]]:
     """[[module, what it did]] of a finished run, in plain words (web app, reports)."""
     out = []
+    c = st.logs.get("detect", {}).get("combined") or {}
+    if c.get("enabled") is False:
+        out.append(["approach 1 combined", "off (model only)"])
+    elif "error" in c:
+        out.append(["approach 1 combined", "skipped: " + c["error"]])
+    elif c:
+        out.append(["approach 1 combined",
+                    f"{c.get('filled_primitives', 0):,} lines the model left unlabelled took approach 1's class; "
+                    f"{c.get('walls_replaced', 0)} wall(s) re-paired and {c.get('walls_added', 0)} added, "
+                    f"{c.get('columns_added', 0)} column(s), {c.get('doors_added', 0)} door(s) and {c.get('windows_added', 0)} "
+                    f"window(s) added, {c.get('openings_reconciled', 0)} opening(s) corrected by approach 1's geometry, "
+                    f"{c.get('unsupported_doors_rejected', 0)} unsupported door(s) and "
+                    f"{sum(c.get(k, 0) for k in ('duplicate_openings', 'duplicate_openings_after_gaps', 'duplicate_openings_before_classify'))}"
+                    " duplicate opening(s) rejected"])
     d = st.logs.get("detect", {}).get("label_consensus") or {}
     if d.get("skipped"):
         out.append(["label consensus", "off"])

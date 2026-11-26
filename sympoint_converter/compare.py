@@ -21,7 +21,7 @@ from architectural_converter.pipeline.extraction_pipeline import ExtractionPipel
 from architectural_converter.pipeline.pipeline_config import PipelineConfig
 from architectural_converter.visualization.feature_overlay import render_overlay
 
-from .pipeline import SymPointPipeline
+from .combined import CombinedPipeline
 
 SCORE_KEYS = ["wall_precision", "wall_recall", "room_precision", "room_recall", "door_precision", "door_recall",
               "window_precision", "window_recall", "column_precision", "column_recall", "manual_corrections_required"]
@@ -64,6 +64,10 @@ def model_as_reference(model) -> dict:
             "columns": [{"center": c["center"], "size": c["size"]} for c in live(model["columns"])]}
 
 
+def _name2(r) -> str:
+    return "approach 2 (SymPointV2 + approach 1)" if r["approach2"].get("method") == "combined" else "approach 2 (SymPointV2)"
+
+
 def _short(m):
     return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.items() if k in SCORE_KEYS}
 
@@ -79,8 +83,9 @@ def compare_one(path, sp_cfg, url=None, response=None, progress=print) -> dict:
     st1 = ExtractionPipeline(PipelineConfig()).process(path)
     out["approach1"] = {"seconds": round(time.perf_counter() - t0, 2), "counts": counts(st1.model)}
     t0 = time.perf_counter()
-    st2 = SymPointPipeline(sp_cfg, url=url, response=response, labels_progress=progress).process(path)
+    st2 = CombinedPipeline(sp_cfg, url=url, response=response, labels_progress=progress).process(path)
     out["approach2"] = {"seconds": round(time.perf_counter() - t0, 2), "counts": counts(st2.model),
+                        "method": st2.logs["detect"].get("approach", "sympoint"),
                         "labels_source": st2.logs["detect"].get("labels_source"),
                         "extract": {k: v for k, v in st2.logs["detect"].items() if k != "approach"}}
     if ref is not None:
@@ -116,7 +121,7 @@ def to_markdown(res) -> str:
             continue
         a, b = r["approach1"], r["approach2"]
         lines.append(f"### {name}\n")
-        lines.append("| | approach 1 (rules) | approach 2 (SymPointV2) |\n|---|---|---|")
+        lines.append(f"| | approach 1 (rules) | {_name2(r)} |\n|---|---|---|")
         for k in a["counts"]:
             lines.append(f"| {k} | {a['counts'][k]} | {b['counts'][k]} |")
         lines.append(f"| seconds | {a['seconds']} | {b['seconds']} (labels: {b['labels_source']}) |")
@@ -165,7 +170,7 @@ td,th{padding:3px 10px;border-bottom:1px solid var(--line);text-align:left}td.n{
         if st1 is not None:
             try:
                 svgs = (f"<div class=grid><div><div class=cap>approach 1 (rules)</div><div class=pane>{render_overlay(st1)}</div></div>"
-                        f"<div><div class=cap>approach 2 (SymPointV2)</div><div class=pane>{render_overlay(st2)}</div></div></div>")
+                        f"<div><div class=cap>{_name2(r)}</div><div class=pane>{render_overlay(st2)}</div></div></div>")
             except Exception as e:  # noqa: BLE001
                 svgs = f"<p class=cap>overlay failed: {html.escape(str(e))}</p>"
         parts.append(f"<h2>{name}</h2><table><tr><th></th><th>approach 1</th><th>approach 2</th></tr>{rows}</table>"
