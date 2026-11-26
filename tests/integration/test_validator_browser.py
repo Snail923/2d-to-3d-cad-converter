@@ -37,11 +37,12 @@ const { chromium } = require('playwright');
   const p = await b.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
   const errs = []; p.on("pageerror", (e) => errs.push(e.message));
   const seen = [];
-  await p.route("http://localhost:1234/**", async (route) => {
+  await p.route(/^http:\/\/(localhost|127\.0\.0\.1):1234\//, async (route) => {
     const u = route.request().url();
     if (u.endsWith("/api/v0/models")) return route.fulfill({ json: { data: [{ id: "vision-model", type: "vlm", state: "loaded" }] } });
     const body = JSON.parse(route.request().postData()), user = body.messages[1].content, text = user[0].text;
-    seen.push({ system: body.messages[0].content, text, images: user.filter((c) => c.type === "image_url").length,
+    seen.push({ hasFormat: !!body.response_format, schemaProps: body.response_format && body.response_format.json_schema.schema.properties,
+      system: body.messages[0].content, text, images: user.filter((c) => c.type === "image_url").length,
       schema: body.response_format && body.response_format.json_schema.schema.properties.edits.items.properties.action.enum });
     const meta = JSON.parse(text.split("METADATA (the result as data, JSON):\n")[1].split("\n\nImage 1")[0]);
     const w = meta.walls.find((x) => !x.openings.length) || meta.walls[0], w2 = meta.walls.find((x) => x !== w) || w;
@@ -51,7 +52,10 @@ const { chromium } = require('playwright');
       { action: "delete_wall", target: w2.tag, position: 0, width: 0, value: "", confidence: 0.6, reason: "counter" },
       { action: "delete_wall", target: "W99", position: 0, width: 0, value: "", confidence: 0.9, reason: "made up" },
       { action: "comment", target: "R1", position: 0, width: 0, value: "", confidence: 0.4, reason: "note" } ];
-    return route.fulfill({ json: { choices: [{ message: { content: JSON.stringify({ room: "R1", summary: "ok", edits }) } }] } });
+    const ans = { room: "R1", analysis: "Access: no door in the reference either side.", summary: "ok", edits };
+    if (!body.response_format)              // free mode: text first, JSON block at the end
+      return route.fulfill({ json: { choices: [{ message: { content: "Looking at R1: the reference shows a swing arc.\n```json\n" + JSON.stringify(ans) + "\n```" } }] } });
+    return route.fulfill({ json: { choices: [{ message: { content: JSON.stringify(ans) } }] } });
   });
   await p.goto(process.argv[2]); await p.waitForFunction(() => window.ready, null, { timeout: 60000 });
   const R = {};
@@ -62,6 +66,7 @@ const { chromium } = require('playwright');
   R.room = await p.evaluate(() => { const r = D.model.rooms.filter((x) => x.status !== "REJECTED" && !x.is_hypothesis).sort((a, b) => b.area - a.area)[3]; ed.setSelection([r.id], false); val.render(); return r.id; });
   await p.click('.ed3d-validator [data-do="runsel"]');
   await p.waitForFunction(() => !val.busy && val.results.length, null, { timeout: 60000 });
+  if (!seen.length) { console.log(JSON.stringify({ debug: await p.evaluate(() => val.results.map((r) => r.error)), errs })); process.exit(3); }
   R.req = { guideline: seen[0].system.startsWith("# Room validation guideline"), images: seen[0].images, actions: seen[0].schema,
     tags: (seen[0].text.match(/^Tags: (.*)$/m) || [])[1] };
   R.first = await p.evaluate(() => val.results[0].edits.map((e) => [e.action, e.status]));
@@ -71,6 +76,18 @@ const { chromium } = require('playwright');
   R.type = await p.evaluate((id) => ed.els.get(id).roomType, R.room);
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click('.ed3d-validator [data-do="export"]')]);
   R.export = JSON.parse(require("fs").readFileSync(await dl.path(), "utf8")).format;
+  R.analysis1 = await p.evaluate(() => val.results[0].analysis);
+  R.schemaFirst = Object.keys(seen[0].schemaProps || {});
+  // free mode: no forced schema, the JSON block at the end of a text answer is used
+  await p.uncheck('.ed3d-validator [data-s="strict"]');
+  await p.evaluate(() => { val.results = []; val.render(); });
+  await p.click('.ed3d-validator [data-do="runsel"]');
+  await p.waitForFunction(() => !val.busy && val.results.length, null, { timeout: 60000 });
+  R.free = await p.evaluate(() => ({ strict: val.s.strict, analysis: val.results[0].analysis, edits: val.results[0].edits.length, error: val.results[0].error || null }));
+  R.freeSchema = !!seen[seen.length - 1].hasFormat;
+  const [rq] = await Promise.all([p.waitForEvent("download"), p.click('.ed3d-validator [data-req]')]);
+  const saved = JSON.parse(require("fs").readFileSync(await rq.path(), "utf8"));
+  R.saved = { images: saved.request.messages[1].content.filter((c) => c.type === "image_url").length, answer: saved.answer.startsWith("Looking at R1") };
   R.errors = errs;
   console.log(JSON.stringify(R)); await b.close();
 })();
@@ -115,3 +132,6 @@ def test_room_check_with_a_fake_lm_studio(site):
     assert len(R["undo1"]) == 1 and R["undo1"][0].startswith("AI (95%): add door")
     assert R["after"][:3] == ["applied", "applied", "applied"] and R["type"] == "bedroom"
     assert R["export"] == "cad2d3d-room-check" and not R["errors"]
+    assert R["schemaFirst"][:2] == ["room", "analysis"] and R["analysis1"].startswith("Access")   # the model looks first
+    assert R["free"] == {"strict": False, "analysis": "Access: no door in the reference either side.", "edits": 5, "error": None}
+    assert R["freeSchema"] is False and R["saved"] == {"images": 2, "answer": True}

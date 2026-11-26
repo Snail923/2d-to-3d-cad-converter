@@ -178,3 +178,5 @@ table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { c
 .ed3d-conf { display: inline-block; width: 40px; height: 6px; margin-right: 4px; vertical-align: middle; border-radius: 3px;
   background: linear-gradient(90deg, #ff7a1a var(--c), #e3e7ee var(--c)); }
 .ed3d .err { color: #b3261e; }
+
+.ed3d-pre { white-space: pre-wrap; max-height: 220px; overflow: auto; font: 11px ui-monospace, monospace; background: #f6f8fb; padding: 4px; margin: 2px 0; }

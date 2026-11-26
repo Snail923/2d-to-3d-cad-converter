@@ -7,14 +7,18 @@
    Edits at or above the auto-apply confidence are applied to the 3D editor at once (each one an undo step
    named "AI: ..."); the others wait in the panel for a person to apply or reject. Nothing leaves the computer. */
 
-export const VDEFAULTS = { endpoint: "http://localhost:1234", model: "", autoApply: 0.85, timeoutS: 300, imageSize: 896,
-  margin: 1.5, temperature: 0, maxTokens: 1800 };
+export const VDEFAULTS = { endpoint: "http://127.0.0.1:1234", model: "", autoApply: 0.85, timeoutS: 600, imageSize: 896,
+  margin: 1.5, temperature: 0, maxTokens: 6000, strict: true };
 const STORE = "cad2d3d.validator";
 export const ACTIONS = ["delete_wall", "add_door", "add_window", "change_opening", "remove_opening", "set_room_type", "comment"];
 export const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["room", "summary", "edits"],
+  type: "object", additionalProperties: false, required: ["room", "analysis", "summary", "edits"],
   properties: {
-    room: { type: "string" }, summary: { type: "string" },
+    room: { type: "string" },
+    // written FIRST: what the model sees, rule by rule, before it decides any edit (structured output is
+    // generated in this order; without it the model has to start the edit list before looking)
+    analysis: { type: "string" },
+    summary: { type: "string" },
     edits: { type: "array", items: { type: "object", additionalProperties: false,
       required: ["action", "target", "position", "width", "value", "confidence", "reason"],
       properties: { action: { type: "string", enum: ACTIONS }, target: { type: "string" }, position: { type: "number" },
@@ -254,24 +258,41 @@ export class Validator {
     try {
       const content = [{ type: "text", text }, ...images.map((b) => ({ type: "image_url", image_url: { url: "data:image/png;base64," + b } }))];
       const body = { model: this.s.model, temperature: this.s.temperature, max_tokens: this.s.maxTokens,
-        messages: [{ role: "system", content: system }, { role: "user", content }],
-        response_format: { type: "json_schema", json_schema: { name: "room_review", strict: true, schema: SCHEMA } } };
+        messages: [{ role: "system", content: system }, { role: "user", content }] };
+      if (this.s.strict) body.response_format = { type: "json_schema", json_schema: { name: "room_review", strict: true, schema: SCHEMA } };
+      this.lastRequest = body;
       const r = await fetch(this.base() + "/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal });
       if (!r.ok) throw new Error(`LM Studio answered ${r.status}: ${(await r.text()).slice(0, 300)}`);
       const j = await r.json();
-      return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+      const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+      this.lastReasoning = msg.reasoning_content || msg.reasoning || "";
+      if (!msg.content && j.choices && j.choices[0] && j.choices[0].finish_reason === "length")
+        throw new Error("the answer was cut off (max tokens): raise the limit or switch strict JSON off");
+      return msg.content || "";
     } finally { clearTimeout(timer); }
   }
   prompt(pk) {
+    const how = this.s.strict
+      ? ["Answer with the JSON schema (room = \"R1\"). Write \"analysis\" FIRST: go through the guideline's rules one by one",
+        "for this room (access, uncertain walls, windows, doors, garage, entrance, wall thickness, room type), say what the",
+        "reference shows and what the result has. Then list an edit for every difference you found."]
+      : ["First write your analysis in plain text: go through the guideline's rules one by one for this room (access,",
+        "uncertain walls, windows, doors, garage, entrance, wall thickness, room type), say what the reference shows and",
+        "what the result has. Then end with ONE JSON object in a ```json block with the keys room (\"R1\"), analysis (short),",
+        "summary and edits, each edit with action, target, position, width, value, confidence and reason."];
     return [this.key(pk), "", "METADATA (the result as data, JSON):", JSON.stringify(pk.meta, null, 1), "",
-      "Image 1 is the REFERENCE drawing, image 2 is the RESULT with tags. Check room R1 following the guideline and",
-      "answer with the JSON schema only (room = \"R1\")."].join("\n");
+      "Image 1 is the REFERENCE drawing, image 2 is the RESULT with tags. Check room R1 following the guideline.", ...how].join("\n");
   }
 
   // ---------------------------------------------------------------- answers -> checked edits
   check(pk, answer) {
     let j;
-    try { j = typeof answer === "string" ? JSON.parse((/\{[\s\S]*\}/.exec(answer) || ["{}"])[0]) : answer; }
+    const lastJson = (t) => {                      // a ```json block, else the outermost {...}
+      const blocks = [...String(t).matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]);
+      for (const b of blocks.reverse()) { try { return JSON.parse(b); } catch { /* next */ } }
+      return JSON.parse((/\{[\s\S]*\}/.exec(t) || ["{}"])[0]);
+    };
+    try { j = typeof answer === "string" ? lastJson(answer) : answer; }
     catch (e) { throw new Error("the model did not answer valid JSON: " + String(answer).slice(0, 160)); }
     const kindOf = (tag) => (tag || "").replace(/\d+$/, "");
     const edits = (Array.isArray(j.edits) ? j.edits : []).map((e, k) => {
@@ -287,7 +308,7 @@ export class Validator {
       else if (out.action === "comment") out.status = "comment";
       return out;
     });
-    return { summary: String(j.summary || "").slice(0, 600), edits };
+    return { analysis: String(j.analysis || "").slice(0, 4000), summary: String(j.summary || "").slice(0, 600), edits };
   }
   apply(res, e) {
     if (e.status !== "pending" && e.status !== "rejected") return false;
@@ -316,12 +337,15 @@ export class Validator {
         const t0 = performance.now();
         const txt = await this.ask(system, this.prompt(pk), imgs);
         rec.seconds = +((performance.now() - t0) / 1000).toFixed(1);
-        Object.assign(rec, this.check(pk, txt), { tags: Object.fromEntries(pk.tags), span: pk.span, raw: txt });
+        Object.assign(rec, this.check(pk, txt), { tags: Object.fromEntries(pk.tags), span: pk.span, raw: txt, reasoning: this.lastReasoning });
+        rec.request = this.lastRequest;
         for (const e of rec.edits) if (e.status === "pending" && e.confidence >= this.s.autoApply) this.apply(rec, e);
       } catch (e) {
+        rec.request = this.lastRequest;
         rec.error = /abort/i.test(e.message) ? "stopped or timed out" : e.message;
         if (/Failed to fetch|NetworkError/i.test(e.message)) {
           rec.error += " — is the LM Studio server running, and is CORS enabled in its server settings?";
+          rec.request = this.lastRequest;
           this.results = this.results.filter((x) => x.room !== room.id).concat(rec);
           break;
         }
@@ -347,6 +371,8 @@ export class Validator {
     p.innerHTML = `<div class="ed3d-row"><b>Room check · local model</b><button data-do="close">×</button></div>
       <div class="ed3d-row"><span>server</span><input data-s="endpoint" value="${esc(s.endpoint)}" style="width:170px"></div>
       <div class="ed3d-row"><span>model</span><select data-s="model">${s.model ? `<option>${esc(s.model)}</option>` : "<option value=''>—</option>"}</select><button data-do="models">Find models</button></div>
+      <div class="ed3d-row"><span title="On: LM Studio forces the JSON schema (analysis is written first). Off: the model answers freely, like in LM Studio's chat, and ends with a JSON block.">strict JSON answer</span><input data-s="strict" type="checkbox" ${s.strict ? "checked" : ""}></div>
+      <div class="ed3d-row"><span>max answer tokens</span><input data-s="maxTokens" type="number" step="500" min="500" value="${s.maxTokens}"></div>
       <div class="ed3d-row"><span>apply automatically from confidence</span><input data-s="autoApply" type="number" step="0.05" min="0" max="1.01" value="${s.autoApply}"></div>
       <details><summary>Guideline${this.guideline ? " (edited)" : ""}</summary><textarea data-g rows="12" style="width:100%;font:11px ui-monospace,monospace">${esc(this.guide)}</textarea>
         <div class="ed3d-row"><button data-do="saveg">Save guideline</button><button data-do="resetg">Default guideline</button></div></details>
@@ -358,16 +384,16 @@ export class Validator {
     const bind = (sel_, fn) => p.querySelectorAll(sel_).forEach((b) => b.addEventListener("click", fn));
     bind('[data-do="close"]', () => this.toggle());
     for (const inp of p.querySelectorAll("[data-s]")) inp.addEventListener("change", () => {
-      this.s[inp.dataset.s] = inp.type === "number" ? parseFloat(inp.value) : inp.value; this.save();
+      this.s[inp.dataset.s] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? parseFloat(inp.value) : inp.value; this.save();
     });
     bind('[data-do="models"]', async () => {
       try {
         const ms = await this.models();
         if (!ms.length) throw new Error("no models: load a vision model in LM Studio");
-        const best = ms.find((m) => m.vision && m.loaded) || ms.find((m) => m.vision) || ms[0];
+        const best = ms.find((m) => m.vision && m.loaded) || ms.find((m) => m.loaded) || ms.find((m) => m.vision) || ms[0];
         if (!this.s.model) this.s.model = best.id;
         const selEl = p.querySelector('[data-s="model"]');
-        selEl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}" ${m.id === this.s.model ? "selected" : ""}>${esc(m.id)}${m.vision ? " · vision" : m.vision === false ? " · text only" : ""}${m.loaded ? " · loaded" : ""}</option>`).join("");
+        selEl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}" ${m.id === this.s.model ? "selected" : ""}>${esc(m.id)}${m.vision ? " · vision" : ""}${m.loaded ? " · loaded" : ""}</option>`).join("");
         this.save();
       } catch (e) { alert(`Could not reach the model server: ${e.message}\nStart LM Studio's server (Developer tab) and enable CORS there.`); }
     });
@@ -386,6 +412,10 @@ export class Validator {
       else if (b.dataset.act === "show") this.ed.showElement(e.id || r.room);
       this.render();
     });
+    bind("[data-req]", (ev) => {                  // the exact request (prompt + both images) and answer, to replay or share
+      const r = this.results[+ev.currentTarget.dataset.req];
+      this.ed.download(`room-check-${r.room}.request.json`, JSON.stringify({ request: r.request, answer: r.raw, reasoning: r.reasoning }, null, 1), "application/json");
+    });
   }
   renderRoom(r, ri) {
     const badge = (e) => `<span class="ed3d-badge ed3d-${e.status}">${e.status}</span>`;
@@ -396,7 +426,12 @@ export class Validator {
         <div class="ed3d-row">${e.id || r.room ? `<button data-act="show" data-r="${ri}" data-e="${ei}">Show</button>` : ""}
         ${e.status === "pending" || e.status === "rejected" ? `<button data-act="apply" data-r="${ri}" data-e="${ei}">Apply</button>` : ""}
         ${e.status === "pending" ? `<button data-act="reject" data-r="${ri}" data-e="${ei}">Reject</button>` : ""}</div></div>`).join("");
+    const more = `<details><summary class="muted">model's analysis and raw answer</summary>
+        ${r.reasoning ? `<div class="muted small"><b>reasoning</b><pre class="ed3d-pre">${esc(r.reasoning)}</pre></div>` : ""}
+        <div class="small"><b>analysis</b><pre class="ed3d-pre">${esc(r.analysis || "—")}</pre></div>
+        <div class="small"><b>raw answer</b><pre class="ed3d-pre">${esc(r.raw || "—")}</pre></div></details>
+      ${r.request ? `<button data-req="${ri}">Save request (prompt + images)</button>` : ""}`;
     return `<div class="ed3d-vroom"><div class="ed3d-row"><b>${esc(r.room)}</b><span class="muted">${esc(r.name || "")}${r.seconds ? ` · ${r.seconds} s` : ""}</span></div>
-      ${r.error ? `<div class="err">${esc(r.error)}</div>` : `<div>${esc(r.summary || "")}</div>${rows || "<div class='muted'>no edits proposed</div>"}`}</div>`;
+      ${r.error ? `<div class="err">${esc(r.error)}</div>` : `<div>${esc(r.summary || "")}</div>${rows || "<div class='muted'>no edits proposed</div>"}`}${more}</div>`;
   }
 }
