@@ -82,6 +82,10 @@ export class Validator {
     this.guideline = null;
     try { const st = JSON.parse(localStorage.getItem(STORE) || "{}"); Object.assign(this.s, st.settings || {}); this.guideline = st.guideline || null; }
     catch { /* private mode */ }
+    // settings saved by the first version: its limits were too small for reasoning models (answers cut off)
+    if (!(this.s.maxTokens >= VDEFAULTS.maxTokens)) this.s.maxTokens = VDEFAULTS.maxTokens;
+    if (!(this.s.timeoutS >= VDEFAULTS.timeoutS)) this.s.timeoutS = VDEFAULTS.timeoutS;
+    if (this.s.strict === undefined) this.s.strict = VDEFAULTS.strict;
     this.results = [];
     this.busy = false; this.stop = false;
     this.defaultGuideline = "";
