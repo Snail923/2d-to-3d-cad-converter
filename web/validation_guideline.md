@@ -13,6 +13,14 @@ You check ONE room of an automatic 2D→3D reading of an architectural floor pla
 Compare the result with the reference and with architectural logic. Propose edits only where the result is
 wrong. Never invent elements that the reference drawing does not show.
 
+## Example images
+
+Before the room, you may receive EXAMPLE images, each with a label (window, door, sliding door, passage, wall,
+railing, stairs, furniture). Each shows how that element is drawn — the element is framed with a dashed red box.
+Examples "from this drawing" show this drawing's own symbols: look for the same symbol in the room's reference
+image. Examples "from another drawing" show the same element in a different drawing style. The examples are
+not part of the room: never propose edits for them.
+
 ## How elements are drawn in a CAD floor plan (read the reference with this)
 
 A floor plan is a horizontal cut through the building at about 1 m height, seen from above. Everything is

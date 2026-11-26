@@ -42,9 +42,11 @@ const { chromium } = require('playwright');
     if (u.endsWith("/api/v0/models")) return route.fulfill({ json: { data: [{ id: "vision-model", type: "vlm", state: "loaded" }] } });
     const body = JSON.parse(route.request().postData()), user = body.messages[1].content, text = user[0].text;
     seen.push({ hasFormat: !!body.response_format, schemaProps: body.response_format && body.response_format.json_schema.schema.properties,
-      system: body.messages[0].content, text, images: user.filter((c) => c.type === "image_url").length,
+      system: body.messages[0].content, text: user.filter((c) => c.type === "text").map((c) => c.text).join("\n"),
+      examples: user.filter((c) => c.type === "text" && /^Example \d/.test(c.text)).map((c) => c.text), images: user.filter((c) => c.type === "image_url").length,
       schema: body.response_format && body.response_format.json_schema.schema.properties.edits.items.properties.action.enum });
-    const meta = JSON.parse(text.split("METADATA (the result as data, JSON):\n")[1].split("\n\nImage 1")[0]);
+    const all = user.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+    const meta = JSON.parse(all.split("METADATA (the result as data, JSON):\n")[1].split("\n\nImage 1")[0]);
     const w = meta.walls.find((x) => !x.openings.length) || meta.walls[0], w2 = meta.walls.find((x) => x !== w) || w;
     const edits = [
       { action: "add_door", target: w.tag, position: 0.5, width: 0, value: "", confidence: 0.95, reason: "swing arc" },
@@ -67,7 +69,7 @@ const { chromium } = require('playwright');
   await p.click('.ed3d-validator [data-do="runsel"]');
   await p.waitForFunction(() => !val.busy && val.results.length, null, { timeout: 60000 });
   if (!seen.length) { console.log(JSON.stringify({ debug: await p.evaluate(() => val.results.map((r) => r.error)), errs })); process.exit(3); }
-  R.req = { guideline: seen[0].system.startsWith("# Room validation guideline"), images: seen[0].images, actions: seen[0].schema,
+  R.req = { guideline: seen[0].system.startsWith("# Room validation guideline"), images: seen[0].images, examples: seen[0].examples, actions: seen[0].schema,
     tags: (seen[0].text.match(/^Tags: (.*)$/m) || [])[1] };
   R.first = await p.evaluate(() => val.results[0].edits.map((e) => [e.action, e.status]));
   R.undo1 = await p.evaluate(() => ed.undoStack.map((u) => u.label));
@@ -103,7 +105,7 @@ def site(tmp_path_factory):
     if subprocess.run([node, "-e", "require.resolve('playwright')"], capture_output=True, env={**os.environ, "NODE_PATH": npm_root}).returncode:
         pytest.skip("playwright (node) not installed")
     d = tmp_path_factory.mktemp("val")
-    for f in ("editor3d.js", "validator.js", "validation_guideline.md", "style.css"):
+    for f in ("editor3d.js", "validator.js", "validation_guideline.md", "validation_examples.json", "style.css"):
         shutil.copy(os.path.join(WEB, f), d)
     shutil.copytree(os.path.join(WEB, "vendor"), d / "vendor")
     (d / "index.html").write_text(PAGE)
@@ -125,7 +127,9 @@ def test_room_check_with_a_fake_lm_studio(site):
     assert r.returncode == 0, r.stderr[-2000:]
     R = json.loads(r.stdout.strip().splitlines()[-1])
     assert R["open"] and R["model"] == "vision-model"
-    assert R["req"]["guideline"] and R["req"]["images"] == 2 and "add_door" in R["req"]["actions"]
+    ex = R["req"]["examples"]                                       # example images before the room: this drawing's, built-in
+    assert R["req"]["guideline"] and len(ex) >= 4 and R["req"]["images"] == 2 + len(ex) and "add_door" in R["req"]["actions"]
+    assert any(e.startswith("Example 1 — WINDOW") for e in ex) and any("HINGED DOOR" in e for e in ex) and any("FURNITURE" in e for e in ex)
     assert R["req"]["tags"].startswith(f"R1 = {R['room']}, W1 = ")
     assert R["first"] == [["add_door", "applied"], ["set_room_type", "pending"], ["delete_wall", "pending"],
                           ["delete_wall", "invalid"], ["comment", "comment"]]          # only >= 0.85 applied at once
@@ -134,4 +138,4 @@ def test_room_check_with_a_fake_lm_studio(site):
     assert R["export"] == "cad2d3d-room-check" and not R["errors"]
     assert R["schemaFirst"][:2] == ["room", "analysis"] and R["analysis1"].startswith("Access")   # the model looks first
     assert R["free"] == {"strict": False, "analysis": "Access: no door in the reference either side.", "edits": 5, "error": None}
-    assert R["freeSchema"] is False and R["saved"] == {"images": 2, "answer": True}
+    assert R["freeSchema"] is False and R["saved"] == {"images": 2 + len(ex), "answer": True}

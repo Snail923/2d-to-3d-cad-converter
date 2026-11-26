@@ -77,6 +77,14 @@ type). It answers in a fixed JSON schema: a list of edits (`delete_wall`, `add_d
 `change_opening`, `remove_opening`, `set_room_type`, `comment`), each with a target tag, a position along the
 wall, a confidence and a reason. Unknown tags or actions are refused.
 
+Before the room the model also gets **example images** (few-shot): small crops of a window, a hinged door, a
+plain wall, stairs and furniture (a counter-example: not a wall), each framed in red and labelled. They come from
+the drawing itself where the pipeline is sure (accepted, confidence ≥ 0.85), from your own picks (select an
+element in 3D, choose what it is, **Use selected as example**; kept in the browser), else from a built-in set
+cut from the real apartment plan (`web/validation_examples.json`, made by `scripts/make_validation_examples.py`).
+The guideline explains how each element is drawn (wall, window, door types, passage, curtain wall, railing,
+stairs, column, furniture, annotations) and how to tell look-alikes apart.
+
 Edits at or above the auto-apply confidence (default 0.85) are applied to the 3D scene at once, each as an undo
 step named *AI (95 %): ...*; the others wait in the panel with **Apply** / **Reject** / **Show**. **Export results
 JSON** keeps the model's proposals, the guideline and the settings for review.

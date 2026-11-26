@@ -180,3 +180,7 @@ table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { c
 .ed3d .err { color: #b3261e; }
 
 .ed3d-pre { white-space: pre-wrap; max-height: 220px; overflow: auto; font: 11px ui-monospace, monospace; background: #f6f8fb; padding: 4px; margin: 2px 0; }
+
+.ed3d-exgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.ed3d-exgrid img { width: 100%; border: 1px solid #d5dae2; }
+.ed3d-exgrid figure { margin: 0; } .ed3d-exgrid figcaption { font-size: 10px; }

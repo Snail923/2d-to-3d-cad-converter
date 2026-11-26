@@ -8,7 +8,7 @@
    named "AI: ..."); the others wait in the panel for a person to apply or reject. Nothing leaves the computer. */
 
 export const VDEFAULTS = { endpoint: "http://127.0.0.1:1234", model: "", autoApply: 0.85, timeoutS: 600, imageSize: 896,
-  margin: 1.5, temperature: 0, maxTokens: 6000, strict: true };
+  margin: 1.5, temperature: 0, maxTokens: 6000, strict: true, examples: true, maxExamples: 6, exampleSize: 384 };
 const STORE = "cad2d3d.validator";
 export const ACTIONS = ["delete_wall", "add_door", "add_window", "change_opening", "remove_opening", "set_room_type", "comment"];
 export const SCHEMA = {
@@ -74,6 +74,67 @@ function outlineShare(a, b, poly, tol) {        // share of the wall's length th
   return k / n;
 }
 
+// Example images: how an element is drawn, shown to the model before the room (few-shot). Taken from the
+// current drawing where the pipeline is sure, from the user's own picks, else from the built-in set
+// (web/validation_examples.json, cut from samples/real/apartment-building-plan.dxf).
+export const EXAMPLE_KINDS = {
+  window: "WINDOW in an exterior wall: the wall lines stop and thin parallel lines (frame / glass) run inside the wall thickness",
+  door: "HINGED DOOR: a gap in the wall with a door leaf line and a quarter-circle swing arc",
+  sliding: "SLIDING DOOR or WARDROBE FRONT: straight overlapping lines across a gap or niche, no arc",
+  passage: "OPEN PASSAGE: a gap in the wall with no leaf, no arc and no glass",
+  wall: "WALL with no opening: two continuous parallel lines (the wall faces)",
+  railing: "BALCONY RAILING / PARAPET: a thin edge of an outdoor space, not a full wall",
+  stair: "STAIRS: equally spaced treads; the treads are not walls",
+  furniture: "FURNITURE (NOT a wall, door or window): beds, counters, wardrobes, sofas, sanitary fittings",
+};
+const boxOf = (pts, pad = 0) => [Math.min(...pts.map((p) => p[0])) - pad, Math.min(...pts.map((p) => p[1])) - pad, Math.max(...pts.map((p) => p[0])) + pad, Math.max(...pts.map((p) => p[1])) + pad];
+function cropAround(hl, min = 2.6) {           // a square around the framed element, with context
+  const cx = (hl[0] + hl[2]) / 2, cy = (hl[1] + hl[3]) / 2, h = Math.max(min, (hl[2] - hl[0]) * 1.8, (hl[3] - hl[1]) * 1.8) / 2;
+  return [cx - h, cy - h, cx + h, cy + h];
+}
+function openingBox(o, t, kind) {               // chord across the wall thickness; a door also covers its swing
+  const a = o.position.start, b = o.position.end, L = hyp(a, b) || 1e-9, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
+  const d = kind === "door" ? Math.max(o.width || L, t) : t / 2 + 0.05;
+  return boxOf([a, b].flatMap((p) => [[p[0] + n[0] * d, p[1] + n[1] * d], [p[0] - n[0] * d, p[1] - n[1] * d]]), 0.05);
+}
+function crossings(view, hl) {                  // lines of the drawing that enter a box (clutter around an example)
+  if (!view) return 0;
+  let n = 0;
+  const near = [hl[0] - 0.4, hl[1] - 0.4, hl[2] + 0.4, hl[3] + 0.4];
+  for (const l of view.lines) {
+    if (l.p.some(([x, y]) => x > hl[0] && x < hl[2] && y > hl[1] && y < hl[3])) n++;
+    else if ((l.k === "furniture" || l.k === "door") && l.p.some(([x, y]) => x > near[0] && x < near[2] && y > near[1] && y < near[3])) n++;
+  }
+  return n;
+}
+export function autoExamples(model, view = null) {   // elements of THIS drawing the pipeline is sure of
+  const out = [], walls = new Map((model.walls || []).map((w) => [w.id, w]));
+  const sure = (e) => e.status === "ACCEPTED" && (e.confidence || 0) >= 0.85;
+  const pick = (kind, test) => {
+    const o = (model.openings || []).filter((x) => sure(x) && test(x)).sort((p, q) => q.confidence - p.confidence)[0];
+    if (!o || !o.position) return;
+    const t = (walls.get(o.host_wall) || {}).thickness || 0.2, hl = openingBox(o, t, kind);
+    out.push({ kind, source: "this drawing", ref: o.id, hl, bb: cropAround(hl) });
+  };
+  pick("window", (o) => o.type === "window");
+  pick("door", (o) => o.type === "door" && /swing/.test(o.subtype || ""));
+  pick("sliding", (o) => o.type === "door" && /sliding/.test(o.subtype || ""));
+  pick("passage", (o) => o.type === "opening" && /passage/.test(o.subtype || ""));
+  const wallBox = (w) => {
+    const a = w.geometry.start, b = w.geometry.end, L = hyp(a, b), u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const p = [m[0] - u[0], m[1] - u[1]], q = [m[0] + u[0], m[1] + u[1]], n = [-u[1], u[0]], h = (w.thickness || 0.2) / 2 + 0.05;
+    return boxOf([p, q].flatMap((r) => [[r[0] + n[0] * h, r[1] + n[1] * h], [r[0] - n[0] * h, r[1] - n[1] * h]]));
+  };
+  // a plain stretch of exterior wall with as little else drawn across it as possible (stairs, grids, furniture)
+  const ws = (model.walls || []).filter((x) => sure(x) && x.classification === "exterior_wall" && !(x.openings || []).length && x.geometry && x.geometry.start
+    && hyp(x.geometry.start, x.geometry.end) >= 2.5).sort((p, q) => q.confidence - p.confidence).slice(0, 20)
+    .map((x) => ({ x, hl: wallBox(x) })).map((c) => ({ ...c, n: crossings(view, c.hl) })).sort((p, q) => p.n - q.n);
+  if (ws.length) out.push({ kind: "wall", source: "this drawing", ref: ws[0].x.id, hl: ws[0].hl, bb: cropAround(ws[0].hl) });
+  const st = (model.stairs || []).filter((x) => x.status === "ACCEPTED" && x.polygon)[0];
+  if (st) { const hl = boxOf(st.polygon.exterior, 0.1); out.push({ kind: "stair", source: "this drawing", ref: st.id, hl, bb: cropAround(hl, 3) }); }
+  return out;
+}
+
 export class Validator {
   constructor(editor, getData) {
     this.ed = editor;
@@ -88,6 +149,9 @@ export class Validator {
     if (this.s.strict === undefined) this.s.strict = VDEFAULTS.strict;
     this.results = [];
     this.busy = false; this.stop = false;
+    this.builtin = [];
+    fetch(new URL("./validation_examples.json", import.meta.url)).then((r) => (r.ok ? r.json() : [])).then((j) => { this.builtin = j; }).catch(() => {});
+    try { this.custom = JSON.parse(localStorage.getItem(STORE + ".examples") || "[]"); } catch { this.custom = []; }
     this.defaultGuideline = "";
     fetch(new URL("./validation_guideline.md", import.meta.url)).then((r) => (r.ok ? r.text() : "")).then((t) => { this.defaultGuideline = t; })
       .catch(() => {});
@@ -98,6 +162,62 @@ export class Validator {
     editor.container.appendChild(this.panel);
   }
   save() { try { localStorage.setItem(STORE, JSON.stringify({ settings: this.s, guideline: this.guideline })); } catch { /* private mode */ } }
+  saveCustom() { try { localStorage.setItem(STORE + ".examples", JSON.stringify(this.custom)); } catch { /* storage full or private mode */ } }
+
+  // ---------------------------------------------------------------- example images
+  exampleSvg(spec, view) {                     // reference lines around the element, the element framed in red
+    const [x0, y0, x1, y1] = spec.bb, w = x1 - x0, size = this.s.exampleSize, px = w / size;
+    const X = (x) => (x - x0).toFixed(3), Y = (y) => (y1 - y).toFixed(3);
+    const src = spec.lines || (view ? view.lines.map((l) => l.p) : []);
+    const vis = (pts) => Math.max(...pts.map((p) => p[0])) >= x0 && Math.min(...pts.map((p) => p[0])) <= x1 && Math.max(...pts.map((p) => p[1])) >= y0 && Math.min(...pts.map((p) => p[1])) <= y1;
+    const lines = src.filter(vis).map((pts) => `<path d="M${pts.map(([x, y]) => X(x) + " " + Y(y)).join(" L")}"/>`).join("");
+    const [a, b, c, d] = spec.hl;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${w.toFixed(3)} ${w.toFixed(3)}"><rect width="${w}" height="${w}" fill="#fff"/>
+      <g fill="none" stroke="#000" stroke-width="${(1.6 * px).toFixed(4)}" stroke-linecap="round">${lines}</g>
+      <rect x="${X(a)}" y="${Y(d)}" width="${(c - a).toFixed(3)}" height="${(d - b).toFixed(3)}" fill="rgb(255,0,0)" fill-opacity="0.06" stroke="#e00" stroke-width="${(3 * px).toFixed(4)}" stroke-dasharray="${(8 * px).toFixed(3)} ${(5 * px).toFixed(3)}"/>
+      <path d="M${(w * 0.05).toFixed(3)} ${(w * 0.95).toFixed(3)} h1" stroke="#0055cc" stroke-width="${(3 * px).toFixed(4)}"/></svg>`;
+  }
+  // the examples sent with every room: the user's own first, then this drawing's, then built-in, one per kind
+  async examples() {
+    if (!this.s.examples) return [];
+    const { model, view } = this.getData(), have = new Set(), out = [];
+    const add = async (spec, img) => {
+      if (have.has(spec.kind) && spec.source !== "yours") return;
+      if (out.length >= this.s.maxExamples) return;
+      have.add(spec.kind);
+      out.push({ ...spec, img: img || await this.raster(this.exampleSvg(spec, view)) });
+    };
+    for (const c of this.custom) await add({ ...c, source: "yours" }, c.img);
+    if (model) for (const sp of autoExamples(model, view)) await add(sp);
+    for (const sp of this.builtin) await add({ ...sp, source: "built-in" });
+    return out;
+  }
+  async addCustom(kind) {                      // the element selected in the 3D view becomes an example
+    const k = [...this.ed.sel][0];
+    if (!k) return alert("Select a wall, door, window or piece of furniture in the 3D view first.");
+    const ed = this.ed, { view } = this.getData();
+    let hl;
+    if (k.startsWith("op:")) {
+      const { wall, op } = ed.opening(k), [ox, oy] = ed.drawnOffset(wall.level);
+      const a = [wall.a[0] - ox, wall.a[1] - oy], b = [wall.b[0] - ox, wall.b[1] - oy], L = hyp(a, b), u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
+      const p0 = [a[0] + u[0] * op.s0, a[1] + u[1] * op.s0], p1 = [a[0] + u[0] * op.s1, a[1] + u[1] * op.s1];
+      hl = openingBox({ position: { start: p0, end: p1 }, width: op.s1 - op.s0 }, wall.thickness, op.type);
+    } else {
+      const el = ed.els.get(k);
+      if (!el) return;
+      const [ox, oy] = ed.drawnOffset(el.level);
+      if (el.kind === "wall" || el.kind === "railing") {
+        const a = [el.a[0] - ox, el.a[1] - oy], b = [el.b[0] - ox, el.b[1] - oy], L = hyp(a, b) || 1e-9, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L], h = (el.thickness || 0.2) / 2 + 0.05;
+        hl = boxOf([a, b].flatMap((r) => [[r[0] + n[0] * h, r[1] + n[1] * h], [r[0] - n[0] * h, r[1] - n[1] * h]]));
+      } else if (el.ring) hl = boxOf(el.ring.map((p) => [p[0] - ox, p[1] - oy]), 0.05);
+      else if (el.box) hl = [el.box[0] - ox, el.box[1] - oy, el.box[3] - ox, el.box[4] - oy];
+    }
+    if (!hl) return;
+    const spec = { kind, hl, bb: cropAround(hl), ref: k };
+    spec.img = await this.raster(this.exampleSvg(spec, view));
+    this.custom = [...this.custom.filter((c) => c.ref !== k), spec].slice(-12);
+    this.saveCustom(); this.render();
+  }
   get guide() { return this.guideline || this.defaultGuideline; }
 
   // ---------------------------------------------------------------- what the model sees about one room
@@ -255,12 +375,12 @@ export class Validator {
     const j = await get(this.base() + "/v1/models");
     return (j.data || []).map((m) => ({ id: m.id, vision: null, loaded: null }));
   }
-  async ask(system, text, images) {
+  async ask(system, text, images, prefix = []) {
     if (!this.s.model) throw new Error("choose a model first (Find models)");
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), this.s.timeoutS * 1000);
     this.abort = ctl;
     try {
-      const content = [{ type: "text", text }, ...images.map((b) => ({ type: "image_url", image_url: { url: "data:image/png;base64," + b } }))];
+      const content = [...prefix, { type: "text", text }, ...images.map((b) => ({ type: "image_url", image_url: { url: "data:image/png;base64," + b } }))];
       const body = { model: this.s.model, temperature: this.s.temperature, max_tokens: this.s.maxTokens,
         messages: [{ role: "system", content: system }, { role: "user", content }] };
       if (this.s.strict) body.response_format = { type: "json_schema", json_schema: { name: "room_review", strict: true, schema: SCHEMA } };
@@ -330,6 +450,13 @@ export class Validator {
     if (this.busy) return;
     this.busy = true; this.stop = false;
     const system = this.guide + "\n\nAnswer ONLY with JSON matching the schema.";
+    let exs = [];
+    try { exs = await this.examples(); } catch { exs = []; }
+    const prefix = exs.length ? [{ type: "text", text: `EXAMPLES (${exs.length}): how elements look in a drawing, the element framed in red. They are NOT the room to check.` },
+      ...exs.flatMap((e, k) => [{ type: "text", text: `Example ${k + 1} — ${EXAMPLE_KINDS[e.kind] || e.kind}${e.source === "built-in" ? " (from another drawing)" : ""}` },
+        { type: "image_url", image_url: { url: "data:image/png;base64," + e.img } }]),
+      { type: "text", text: "Now the room to check:" }] : [];
+    this.lastExamples = exs.map((e) => `${e.kind} (${e.source})`);
     for (let i = 0; i < rooms.length && !this.stop; i++) {
       const room = rooms[i];
       this.progress = `Checking ${room.id} (${i + 1} / ${rooms.length})…`;
@@ -339,7 +466,8 @@ export class Validator {
         const pk = this.packet(room);
         const imgs = [await this.raster(this.svg(pk, false)), await this.raster(this.svg(pk, true))];
         const t0 = performance.now();
-        const txt = await this.ask(system, this.prompt(pk), imgs);
+        const txt = await this.ask(system, this.prompt(pk), imgs, prefix);
+        rec.examples = this.lastExamples;
         rec.seconds = +((performance.now() - t0) / 1000).toFixed(1);
         Object.assign(rec, this.check(pk, txt), { tags: Object.fromEntries(pk.tags), span: pk.span, raw: txt, reasoning: this.lastReasoning });
         rec.request = this.lastRequest;
@@ -378,6 +506,12 @@ export class Validator {
       <div class="ed3d-row"><span title="On: LM Studio forces the JSON schema (analysis is written first). Off: the model answers freely, like in LM Studio's chat, and ends with a JSON block.">strict JSON answer</span><input data-s="strict" type="checkbox" ${s.strict ? "checked" : ""}></div>
       <div class="ed3d-row"><span>max answer tokens</span><input data-s="maxTokens" type="number" step="500" min="500" value="${s.maxTokens}"></div>
       <div class="ed3d-row"><span>apply automatically from confidence</span><input data-s="autoApply" type="number" step="0.05" min="0" max="1.01" value="${s.autoApply}"></div>
+      <details data-ex><summary>Example images${this.s.examples ? "" : " (off)"}</summary>
+        <div class="ed3d-row"><span>send example images</span><input data-s="examples" type="checkbox" ${s.examples ? "checked" : ""}></div>
+        <div class="ed3d-row"><span>at most</span><input data-s="maxExamples" type="number" min="0" max="12" value="${s.maxExamples}"></div>
+        <div class="ed3d-row"><select data-exkind>${Object.keys(EXAMPLE_KINDS).map((k) => `<option value="${k}">${k}</option>`).join("")}</select>
+          <button data-do="addex">Use selected as example</button></div>
+        <div class="ed3d-exgrid" data-exgrid><span class="muted">…</span></div></details>
       <details><summary>Guideline${this.guideline ? " (edited)" : ""}</summary><textarea data-g rows="12" style="width:100%;font:11px ui-monospace,monospace">${esc(this.guide)}</textarea>
         <div class="ed3d-row"><button data-do="saveg">Save guideline</button><button data-do="resetg">Default guideline</button></div></details>
       <div class="ed3d-row"><button data-do="runsel" ${sel.length && !this.busy ? "" : "disabled"}>Check selected room${sel.length > 1 ? "s" : ""} (${sel.length})</button>
@@ -400,6 +534,15 @@ export class Validator {
         selEl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}" ${m.id === this.s.model ? "selected" : ""}>${esc(m.id)}${m.vision ? " · vision" : ""}${m.loaded ? " · loaded" : ""}</option>`).join("");
         this.save();
       } catch (e) { alert(`Could not reach the model server: ${e.message}\nStart LM Studio's server (Developer tab) and enable CORS there.`); }
+    });
+    bind('[data-do="addex"]', () => this.addCustom(p.querySelector("[data-exkind]").value));
+    const exd = p.querySelector("[data-ex]");
+    exd.addEventListener("toggle", async () => {
+      if (!exd.open) return;
+      const grid = p.querySelector("[data-exgrid]"), exs = await this.examples().catch(() => []);
+      grid.innerHTML = exs.length ? exs.map((e) => `<figure><img src="data:image/png;base64,${e.img}"><figcaption>${esc(e.kind)} · ${esc(e.source)}${e.source === "yours"
+        ? ` <a href="#" data-rmex="${esc(e.ref)}">remove</a>` : ""}</figcaption></figure>`).join("") : "<span class='muted'>no examples (switch them on, or add your own)</span>";
+      grid.querySelectorAll("[data-rmex]").forEach((a) => a.addEventListener("click", (ev) => { ev.preventDefault(); this.custom = this.custom.filter((c) => c.ref !== a.dataset.rmex); this.saveCustom(); this.render(); }));
     });
     bind('[data-do="saveg"]', () => { this.guideline = p.querySelector("[data-g]").value; this.save(); this.render(); });
     bind('[data-do="resetg"]', () => { this.guideline = null; this.save(); this.render(); });
