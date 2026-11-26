@@ -66,6 +66,26 @@ kept in the browser and can be exported / imported as JSON. **?** (F1) lists all
 later. The 3D edits are separate from the 2D corrections: loading or re-running a drawing asks before it
 replaces an edited scene.
 
+### Room check by a local vision model (C in the 3D editor)
+
+A model running on your computer in [LM Studio](https://lmstudio.ai) checks the result room by room and proposes
+edits. For each room it receives the **reference** drawing around the room, the **result** drawn over it with a
+short tag on every wall and opening (W1, D1, N1...), a **key** (colours and tags) and the room's **metadata**
+(walls, openings, neighbours, texts inside, validation issues), together with the **guideline**
+(`web/validation_guideline.md`: access, uncertain walls, windows, doors, garage, entrance, wall thickness, room
+type). It answers in a fixed JSON schema: a list of edits (`delete_wall`, `add_door`, `add_window`,
+`change_opening`, `remove_opening`, `set_room_type`, `comment`), each with a target tag, a position along the
+wall, a confidence and a reason. Unknown tags or actions are refused.
+
+Edits at or above the auto-apply confidence (default 0.85) are applied to the 3D scene at once, each as an undo
+step named *AI (95 %): ...*; the others wait in the panel with **Apply** / **Reject** / **Show**. **Export results
+JSON** keeps the model's proposals, the guideline and the settings for review.
+
+Setup: in LM Studio load a vision model, open the *Developer* tab, start the server (default
+`http://localhost:1234`) and switch on **CORS** (the page calls it from the browser). In the 3D view press **C**,
+**Find models**, then **Check selected room** (select a room's floor) or **Check all rooms**. The guideline can be
+edited in the panel (kept in the browser) or in `web/validation_guideline.md`.
+
 ### Enable the GitHub Pages site (one-time)
 
 The workflow `.github/workflows/pages.yml` runs the tests, builds the site and deploys it on every push.

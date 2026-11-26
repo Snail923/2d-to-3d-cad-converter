@@ -1,4 +1,5 @@
 import { Editor3D } from "./editor3d.js";
+import { Validator } from "./validator.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (s) => document.querySelector(s);
@@ -1157,6 +1158,7 @@ for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
 let viewer3d;
 try {
   viewer3d = new Editor3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
+  new Validator(viewer3d, () => ({ model: S.model, view: S.view }));   // room check by a local vision model (key C)
 } catch (e) {
   console.error("3D viewer unavailable:", e);
   viewer3d = { setData() {}, setVisible() {}, highlight() {}, resize() {} };

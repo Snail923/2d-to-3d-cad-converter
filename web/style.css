@@ -165,3 +165,16 @@ table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { c
 .ed3d-io-btn { font: 11px system-ui, sans-serif; padding: 3px 6px; background: rgba(255,255,255,.92); border: 1px solid #c9ced8; border-radius: 4px; cursor: pointer; }
 .ed3d .muted { color: #6b7385; }
 .ed3d table td { padding: 1px 6px; }
+
+/* room validator panel (web/validator.js) */
+.ed3d-validator { width: 360px; }
+.ed3d-validator textarea { box-sizing: border-box; }
+.ed3d-vresults { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.ed3d-vroom { border-top: 1px solid #e0e4ea; padding-top: 4px; }
+.ed3d-vedit { margin: 4px 0 4px 6px; padding-left: 6px; border-left: 3px solid #d5dae2; }
+.ed3d-badge { font-size: 10px; padding: 0 5px; border-radius: 8px; background: #eef1f6; color: #3a4252; }
+.ed3d-applied { background: #e3f4e6; color: #1b6b2c; } .ed3d-pending { background: #fff1db; color: #8a5300; }
+.ed3d-rejected, .ed3d-failed, .ed3d-invalid { background: #fde5e5; color: #9b1c1c; } .ed3d-comment { background: #e8eefc; color: #2a4a9b; }
+.ed3d-conf { display: inline-block; width: 40px; height: 6px; margin-right: 4px; vertical-align: middle; border-radius: 3px;
+  background: linear-gradient(90deg, #ff7a1a var(--c), #e3e7ee var(--c)); }
+.ed3d .err { color: #b3261e; }

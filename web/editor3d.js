@@ -1098,7 +1098,75 @@ export class Editor3D {
     ev.preventDefault();
     this.run(act, ev);
   }
+  // another module (the room validator) adds a command: a key, a label and a tool-shelf button
+  addAction(act, key, label, shelfLabel, fn) {
+    this.extra = this.extra || {};
+    this.extra[act] = fn;
+    ACTION_LABEL[act] = label;
+    if (!(act in this.keymap)) this.keymap[act] = key;
+    if (!(act in DEFAULT_KEYMAP)) DEFAULT_KEYMAP[act] = key;
+    const b = document.createElement("button");
+    b.className = "ed3d-tool"; b.dataset.act = act; b.dataset.label = shelfLabel;
+    b.addEventListener("click", (ev) => { ev.preventDefault(); this.canvas.focus(); this.run(act, this.lastEv); });
+    this.ui.shelf.appendChild(b);
+    this.refreshUi();
+  }
+  drawnOffset(level) {                          // stacked coordinates -> the coordinates of the drawing
+    return this.stacked && this.levelOff && this.levelOff.has(level) ? this.levelOff.get(level) : [0, 0, 0];
+  }
+  showElement(id) {
+    const key = this.els.has(id) ? id : this.opKey(id);
+    if (!key) return this.say(`${id} is not in the 3D scene`);
+    this.setSelection([key], false);
+    this.frameSelected();
+  }
+  // One edit from the room validator, applied as an undoable step. Returns {ok, msg}.
+  aiEdit({ action, id, position = 0.5, width = 0, value = "", label }) {
+    const S = this.settings;
+    const wallOfOp = (oid) => [...this.els.values()].find((e) => e.kind === "wall" && (e.openings || []).some((o) => o.id === oid));
+    if (action === "delete_wall") {
+      if (!this.els.has(id)) return { ok: false, msg: "the wall is no longer there" };
+      this.begin(); this.els.delete(id); this.dropObj(id); this.sel.delete(id); this.commit(label);
+      return { ok: true, msg: "wall deleted" };
+    }
+    if (action === "add_door" || action === "add_window") {
+      const w = this.els.get(id);
+      if (!w || w.kind !== "wall") return { ok: false, msg: "the wall is no longer there" };
+      const L = hyp(w.a, w.b), isDoor = action === "add_door";
+      const wd = Math.min(width > 0.3 ? width : (isDoor ? S.doorWidth : S.windowWidth), L - 0.1);
+      const s0 = Math.max(0.05, Math.min(L - 0.05 - wd, position * L - wd / 2)), s1 = s0 + wd;
+      if ((w.openings || []).some((o) => Math.min(o.s1, s1) - Math.max(o.s0, s0) > 0.01)) return { ok: false, msg: "overlaps an opening already in this wall" };
+      this.begin();
+      w.openings = [...(w.openings || []), { id: this.newId(isDoor ? "door" : "window"), type: isDoor ? "door" : "window", s0, s1,
+        z0: isDoor ? 0 : S.windowSill, z1: Math.min(w.height, isDoor ? S.doorHeight : S.windowHead) }];
+      this.buildObj(w.id); this.commit(label);
+      return { ok: true, msg: `${isDoor ? "door" : "window"} ${wd.toFixed(2)} m cut at ${s0.toFixed(2)} m` };
+    }
+    if (action === "change_opening" || action === "remove_opening") {
+      const w = wallOfOp(id);
+      if (!w) return { ok: false, msg: "the opening is no longer there" };
+      this.begin();
+      if (action === "remove_opening") w.openings = w.openings.filter((o) => o.id !== id);
+      else {
+        const o = w.openings.find((x) => x.id === id);
+        o.type = value;
+        if (value === "window") { o.z0 = S.windowSill; o.z1 = Math.min(w.height, S.windowHead); }
+        else { o.z0 = 0; o.z1 = Math.min(w.height, S.doorHeight); }
+      }
+      this.buildObj(w.id); this.commit(label);
+      return { ok: true, msg: action === "remove_opening" ? "opening closed" : `now a ${value}` };
+    }
+    if (action === "set_room_type") {
+      const r = this.els.get(id);
+      if (!r) return { ok: false, msg: "the room's floor is not in the 3D scene" };
+      this.begin(); r.roomType = value; r.cls = value; this.commit(label);
+      return { ok: true, msg: `room type ${value}` };
+    }
+    return { ok: false, msg: "nothing to apply" };
+  }
+
   run(act, ev = null) {
+    if (this.extra && this.extra[act]) return this.extra[act](ev);
     const t = { tool_wall: "wall", tool_door: "door", tool_window: "window", tool_floor: "floor", tool_roof: "roof" }[act];
     if (t) return this.startTool(t);
     switch (act) {
