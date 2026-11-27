@@ -290,7 +290,7 @@ export class Editor3D {
     if (this.dirty && this.els.size && !window.confirm("Replace the 3D scene and lose its edits? (Cancel keeps the edited scene.)")) return;
     for (const id of [...this.objs.keys()]) this.dropObj(id);
     this.els.clear(); this.fixed.clear(); this.sel.clear(); this.hidden.clear();
-    this.undoStack = []; this.redoStack = []; this.dirty = false; this.endMode(true);
+    this.undoStack = []; this.redoStack = []; this.dirty = false; this.edited = false; this.endMode(true);
     const review = new Set((model.walls || []).filter((w) => w.status === "NEEDS_REVIEW").map((w) => w.id));
     const levelOf = new Map();
     for (const k of ["walls", "openings", "rooms", "columns", "stairs"]) for (const e of model[k] || []) levelOf.set(e.id, e.level);
@@ -354,7 +354,9 @@ export class Editor3D {
       this.bounds = [[Math.min(lo.x, hi.x), Math.min(lo.y, hi.y), Math.min(lo.z, hi.z)], [Math.max(lo.x, hi.x), Math.max(lo.y, hi.y), Math.max(lo.z, hi.z)]];
       this.frame(...this.bounds); this.drawGrid();
     }
+    this.edited = true;
     this.say(on ? "Storeys stacked at their levels (edits kept)" : "Storeys laid side by side as drawn (edits kept)");
+    this.changed();
     return true;
   }
 
@@ -560,23 +562,26 @@ export class Editor3D {
     this.redoStack = [];
     this.pending = null;
     this.dirty = true;
+    this.edited = true;
     this.say(label);
     this.refreshUi();
+    this.changed();
   }
+  changed() { if (this.onChange) try { this.onChange(); } catch { /* a listener must not break editing */ } }
   begin() { this.pending = this.snapshot(); }   // state before an operation (pushed by commit)
   undo() {
     const u = this.undoStack.pop();
     if (!u) return this.say("Nothing to undo");
     this.redoStack.push({ label: u.label, snap: this.snapshot() });
     this.restore(u.snap);
-    this.say(`Undone: ${u.label}`); this.refreshUi();
+    this.say(`Undone: ${u.label}`); this.refreshUi(); this.changed();
   }
   redo() {
     const r = this.redoStack.pop();
     if (!r) return this.say("Nothing to redo");
     this.undoStack.push({ label: r.label, snap: this.snapshot() });
     this.restore(r.snap);
-    this.say(`Redone: ${r.label}`); this.refreshUi();
+    this.say(`Redone: ${r.label}`); this.refreshUi(); this.changed();
   }
   newId(kind) { this.seq += 1; return `edit_${kind}_${String(this.seq).padStart(3, "0")}`; }
 
@@ -1387,6 +1392,24 @@ export class Editor3D {
       this.restore(d.elements);
       this.commit(`Opened a scene (${d.elements.length} elements)`);
     });
+  }
+  // the edited scene for a saved session (null when nothing was edited) and back
+  sessionState() {
+    if (!this.edited) return null;               // independent of "saved to a file": the session keeps every edit
+    const changed = {};                         // fixed meshes are in the saved results; only their edits are kept here
+    return { elements: clone([...this.els.values()]), seq: this.seq, stacked: this.stacked, hidden: [...this.hidden], changed };
+  }
+  restoreSession(st) {
+    if (!st || !st.elements) return;
+    if (st.stacked !== undefined && st.stacked !== this.stacked) this.setStacked(st.stacked);
+    this.seq = Math.max(this.seq, st.seq || 0);
+    this.restore(st.elements);
+    this.hidden = new Set(st.hidden || []);
+    this.applyVisibility();
+    this.dirty = true; this.edited = true;
+    this.undoStack = []; this.redoStack = [];
+    this.say(`Restored the edited scene (${st.elements.length} elements)`);
+    this.refreshUi();
   }
   exportGlb() {                                  // glTF 2.0 binary, y up, one node per element part
     const nodes = [], meshes = [], materials = [], accessors = [], views = [], chunks = [];

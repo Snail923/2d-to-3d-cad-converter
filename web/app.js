@@ -1,5 +1,6 @@
 import { Editor3D } from "./editor3d.js";
 import { Validator } from "./validator.js";
+import { clearSession, debounced, loadSession, saveSession } from "./session.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (s) => document.querySelector(s);
@@ -42,7 +43,14 @@ async function recoverEngine() {
   await call("init", { base: BASE });
   setLoading(null);
 }
-function call(cmd, args = {}, transfer = []) {
+// commands that need the Python engine's state of the drawing (after a restored session it has none yet)
+const STATEFUL = new Set(["evaluate", "export_glb", "export_json", "export_report", "export_sqlite", "sp_compare", "sp_evaluate_both",
+  "sp_mesh", "rerun", "sp_rerun"]);
+async function call(cmd, args = {}, transfer = []) {
+  if (S.needsEngine && STATEFUL.has(cmd)) await ensureEngine();
+  return callRaw(cmd, args, transfer);
+}
+function callRaw(cmd, args = {}, transfer = []) {
   return new Promise((resolve, reject) => {
     const id = ++rpcId;
     pending.set(id, { resolve, reject });
@@ -130,12 +138,81 @@ function download(name, data, type) {
     setLoading(null);
     setStatus("Ready. Open a DXF file or load a sample.");
     renderBenchmark();
+    offerRestore();
     const q = new URLSearchParams(location.search).get("sample");
     if (q) { sel.value = q; loadSample(); }
   } catch (e) {
     setLoading("Failed to start the Python engine: " + e.message + " — reload the page to retry.");
   }
 })();
+
+// ------------------------------------------------------------------ session: survive a page refresh
+// Saved in the browser a moment after every change (results, corrections, 3D edits, room checks); a refresh
+// offers to restore it at once, without re-running anything. The Python engine catches up (once, in the
+// background) the first time a command needs it: it processes the saved drawing again, from SymPointV2's
+// cached answer (no GPU), and re-applies the corrections; the screen and the 3D edits are not touched.
+let validator = null;
+const scheduleSave = debounced(async () => {
+  if (!S.fileBytes || !Object.keys(S.results).length || S.restoring) return;
+  try {
+    await saveSession({ v: 1, fileName: S.fileName, fileBytes: S.fileBytes, sampleRef: S.sampleRef, method: S.method, show: S.show,
+      results: S.results, corrByMethod: { ...S.corrByMethod, ...(S.show ? { [S.show]: S.corrections } : {}) }, spCache: [...S.spCache],
+      scene: viewer3d.sessionState ? viewer3d.sessionState() : null, checks: validator ? validator.sessionState() : null });
+  } catch (e) { console.warn("session not saved:", e); }
+});
+const spConfig = () => ({ tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false });
+const corrCount = (c) => !!c && JSON.stringify(c) !== JSON.stringify(emptyCorr());
+async function ensureEngine() {
+  if (!S.needsEngine || !S.fileBytes) return;
+  S.needsEngine = false;
+  setLoading(`Preparing the engine for ${S.fileName} (once after a restored session)…`);
+  try {
+    for (const m of Object.keys(S.results)) {
+      if (m === "rules") {
+        await callRaw("process", { name: S.fileName, bytes: S.fileBytes.slice(0) });
+        await spSafe("sp_remember", { method: "rules" });
+      } else if (m === "sympoint") {
+        const config = spConfig(), resp = S.spCache.get(`${S.fileName}|${S.fileBytes.byteLength}|${config.tile_m}`);
+        if (!resp) continue;
+        await callRaw("sp_process", { name: S.fileName, bytes: S.fileBytes.slice(0), response: resp, config, safe: false });
+      }
+      const corr = m === S.show ? S.corrections : S.corrByMethod[m];
+      if (corrCount(corr)) {
+        await spSafe("sp_activate", { method: m });
+        await callRaw(S.spAvailable ? "sp_rerun" : "rerun", { corrections: corr });
+      }
+    }
+    if (S.show) await spSafe("sp_activate", { method: S.show });
+  } finally { setLoading(null); }
+}
+async function restoreSession(s) {
+  S.restoring = true;
+  try {
+    S.fileName = s.fileName; S.fileBytes = s.fileBytes; S.sampleRef = s.sampleRef || null;
+    S.results = s.results || {}; S.corrByMethod = s.corrByMethod || {}; S.spCache = new Map(s.spCache || []);
+    if (s.method && [...$("#method").options].some((o) => o.value === s.method && !o.disabled)) { S.method = SPC.method = s.method; $("#method").value = s.method; }
+    S.show = null; S.needsEngine = true;
+    await show(s.show && S.results[s.show] ? s.show : Object.keys(S.results)[0]);
+    if (s.scene && viewer3d.restoreSession) viewer3d.restoreSession(s.scene);
+    if (s.checks && validator) validator.restoreSession(s.checks);
+    if (S.method === "compare" && S.results.rules && S.results.sympoint) $("#tabCompareBtn").style.display = "";
+    setStatus(`Restored ${s.fileName} (saved ${new Date(s.savedAt).toLocaleString()})`);
+  } finally { S.restoring = false; }
+}
+async function offerRestore() {
+  const s = await loadSession();
+  if (!s || !s.fileBytes || !s.results || !Object.keys(s.results).length) return;
+  const box = $("#empty2d");
+  const edits = s.scene ? s.scene.elements.length : 0, checks = (s.checks || []).length;
+  box.innerHTML = `<div>Last session: <b>${esc(s.fileName)}</b> · ${esc(Object.keys(s.results).map((m) => METHOD_NAME[m] || m).join(" + "))}
+    · saved ${esc(new Date(s.savedAt).toLocaleString())}${s.scene ? " · edited 3D scene" : ""}${checks ? ` · ${checks} room check(s)` : ""}</div>
+    <div style="margin-top:8px"><button id="restoreSession" class="btn primary">Restore last session</button>
+    <button id="discardSession" class="btn">Discard</button></div>
+    <div class="small muted" style="margin-top:6px">or open a DXF file / load a sample to start something new</div>`;
+  $("#restoreSession").addEventListener("click", () => restoreSession(s).catch((e) => alert("Restore failed: " + e.message)));
+  $("#discardSession").addEventListener("click", async () => { await clearSession(); box.textContent = "Open a DXF file or load a sample drawing to start."; });
+  void edits;
+}
 
 // ------------------------------------------------------------------ loading drawings
 $("#file").addEventListener("change", async (ev) => {
@@ -277,7 +354,7 @@ async function runSymPoint(name, buf) {
   S.busy = true; S.cancelled = false;
   startJob(`Approach 2 (SymPointV2): analysing ${name} (${(buf.byteLength / 1048576).toFixed(1)} MB)…`);
   const t0 = performance.now();
-  const config = { tile_m: +SPC.tile || 20, use_reasoning: SPC.reasoning !== false };
+  const config = spConfig();
   const key = `${name}|${buf.byteLength}|${config.tile_m}`;
   try {
     let resp = S.spCache.get(key);
@@ -493,6 +570,7 @@ function load(data, keepView = false) {
   renderCorr();
   viewer3d.setData(data.mesh, S.model);
   updateRoofBox(data.mesh);
+  scheduleSave();
   const b = S.model.building || {}, fl = b.stacked ? b.levels.filter((l) => l.kind === "floor_plan").sort((x, y) => x.z - y.z) : [];
   $("#levels3dBox").style.display = fl.length ? "" : "none";
   $("#levels3d").innerHTML = fl.map((l, i) => `<option value="${i}" ${i === fl.length - 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
@@ -1036,6 +1114,7 @@ function addCorr(fn, autoRerun = false) {
   if (autoRerun) rerun();
 }
 function renderCorr() {
+  scheduleSave();
   $("#corrCount").textContent = countCorr();
   $("#corrView").textContent = countCorr() ? JSON.stringify(S.corrections, null, 1) : "No corrections yet.";
 }
@@ -1158,7 +1237,9 @@ for (const b of $$("[data-export]")) b.addEventListener("click", async () => {
 let viewer3d;
 try {
   viewer3d = new Editor3D($("#view3d"), (id) => { if (S.byId.has(id)) select(id); });
-  new Validator(viewer3d, () => ({ model: S.model, view: S.view }));   // room check by a local vision model (key C)
+  validator = new Validator(viewer3d, () => ({ model: S.model, view: S.view }));   // room check by a local vision model (key C)
+  viewer3d.onChange = scheduleSave;
+  validator.onChange = scheduleSave;
 } catch (e) {
   console.error("3D viewer unavailable:", e);
   viewer3d = { setData() {}, setVisible() {}, highlight() {}, resize() {} };

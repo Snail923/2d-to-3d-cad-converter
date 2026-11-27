@@ -50,7 +50,7 @@ const { chromium } = require('playwright');
     const w = meta.walls.find((x) => !x.openings.length) || meta.walls[0], w2 = meta.walls.find((x) => x !== w) || w;
     const edits = [
       { action: "add_door", target: w.tag, position: 0.5, width: 0, value: "", confidence: 0.95, reason: "swing arc" },
-      { action: "set_room_type", target: "R1", position: 0, width: 0, value: "bedroom", confidence: 0.7, reason: "bed" },
+      { action: "set_room_type", target: "R1", position: 0, width: 0, value: "bedroom", confidence: 0.9, reason: "bed" },
       { action: "delete_wall", target: w2.tag, position: 0, width: 0, value: "", confidence: 0.6, reason: "counter" },
       { action: "delete_wall", target: "W99", position: 0, width: 0, value: "", confidence: 0.9, reason: "made up" },
       { action: "comment", target: "R1", position: 0, width: 0, value: "", confidence: 0.4, reason: "note" } ];
@@ -131,9 +131,10 @@ def test_room_check_with_a_fake_lm_studio(site):
     assert R["req"]["guideline"] and len(ex) >= 4 and R["req"]["images"] == 2 + len(ex) and "add_door" in R["req"]["actions"]
     assert any(e.startswith("Example 1 — WINDOW") for e in ex) and any("HINGED DOOR" in e for e in ex) and any("FURNITURE" in e for e in ex)
     assert R["req"]["tags"].startswith(f"R1 = {R['room']}, W1 = ")
-    assert R["first"] == [["add_door", "applied"], ["set_room_type", "pending"], ["delete_wall", "pending"],
-                          ["delete_wall", "invalid"], ["comment", "comment"]]          # only >= 0.85 applied at once
-    assert len(R["undo1"]) == 1 and R["undo1"][0].startswith("AI (95%): add door")
+    # applied at once only when >= 0.85 AND the action is on the auto list (room type yes, a new door no: reviewed)
+    assert R["first"] == [["add_door", "pending"], ["set_room_type", "applied"], ["delete_wall", "pending"],
+                          ["delete_wall", "invalid"], ["comment", "comment"]]
+    assert len(R["undo1"]) == 1 and R["undo1"][0].startswith("AI (90%): set room_type")
     assert R["after"][:3] == ["applied", "applied", "applied"] and R["type"] == "bedroom"
     assert R["export"] == "cad2d3d-room-check" and not R["errors"]
     assert R["schemaFirst"][:2] == ["room", "analysis"] and R["analysis1"].startswith("Access")   # the model looks first

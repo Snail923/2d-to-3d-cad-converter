@@ -9,7 +9,7 @@ import pytest
 WEB = os.path.join(os.path.dirname(__file__), "..", "..", "web")
 
 
-@pytest.mark.parametrize("name,module", [("app.js", True), ("editor3d.js", True), ("validator.js", True),
+@pytest.mark.parametrize("name,module", [("app.js", True), ("editor3d.js", True), ("validator.js", True), ("session.js", True),
                                          ("worker.js", False)])
 def test_web_script_parses(name, module):
     node = shutil.which("node")

@@ -8,7 +8,10 @@
    named "AI: ..."); the others wait in the panel for a person to apply or reject. Nothing leaves the computer. */
 
 export const VDEFAULTS = { endpoint: "http://127.0.0.1:1234", model: "", autoApply: 0.85, timeoutS: 600, imageSize: 896,
-  margin: 1.5, temperature: 0, maxTokens: 6000, strict: true, examples: true, maxExamples: 6, exampleSize: 384 };
+  margin: 1.5, temperature: 0, maxTokens: 6000, strict: true, examples: true, maxExamples: 6, exampleSize: 384,
+  // which actions may be applied without a person, at or above autoApply (the model's confidence is not calibrated:
+  // it gives 0.9-1.0 to almost everything, so geometry changes wait for review by default)
+  autoActions: { change_opening: true, set_room_type: true, add_window: false, add_door: false, delete_wall: false, remove_opening: false } };
 const STORE = "cad2d3d.validator";
 export const ACTIONS = ["delete_wall", "add_door", "add_window", "change_opening", "remove_opening", "set_room_type", "comment"];
 export const SCHEMA = {
@@ -147,6 +150,7 @@ export class Validator {
     if (!(this.s.maxTokens >= VDEFAULTS.maxTokens)) this.s.maxTokens = VDEFAULTS.maxTokens;
     if (!(this.s.timeoutS >= VDEFAULTS.timeoutS)) this.s.timeoutS = VDEFAULTS.timeoutS;
     if (this.s.strict === undefined) this.s.strict = VDEFAULTS.strict;
+    this.s.autoActions = { ...VDEFAULTS.autoActions, ...(this.s.autoActions || {}) };
     this.results = [];
     this.busy = false; this.stop = false;
     this.builtin = [];
@@ -260,7 +264,7 @@ export class Validator {
         return s >= x.sA && s <= x.sB && polyDist(c, c, pk_poly) <= (x.el.thickness || 0.1) / 2 + 0.4;
       };
       const st = x.el.id.startsWith("edit_") ? "drawn by hand" : (x.meta ? x.meta.status : "ACCEPTED");
-      const ops = (x.el.openings || []).filter((o) => x.near(o)).map((o) => {
+      const ops = (x.el.openings || []).filter((o) => x.near(o) || (o.s1 >= x.sA && o.s0 <= x.sB)).map((o) => {
         const ot = tag(o.type === "door" ? "D" : o.type === "window" ? "N" : "O", o.id), om = mo.get(o.id);
         O.push({ tag: ot, id: o.id, type: o.type, subtype: om ? om.subtype : null, width_m: +(o.s1 - o.s0).toFixed(2), wall: t,
           position: +((((o.s0 + o.s1) / 2) - x.sA) / span).toFixed(2), sill_m: o.type === "window" ? +o.z0.toFixed(2) : null,
@@ -471,7 +475,7 @@ export class Validator {
         rec.seconds = +((performance.now() - t0) / 1000).toFixed(1);
         Object.assign(rec, this.check(pk, txt), { tags: Object.fromEntries(pk.tags), span: pk.span, raw: txt, reasoning: this.lastReasoning });
         rec.request = this.lastRequest;
-        for (const e of rec.edits) if (e.status === "pending" && e.confidence >= this.s.autoApply) this.apply(rec, e);
+        for (const e of rec.edits) if (e.status === "pending" && e.confidence >= this.s.autoApply && (this.s.autoActions || {})[e.action]) this.apply(rec, e);
       } catch (e) {
         rec.request = this.lastRequest;
         rec.error = /abort/i.test(e.message) ? "stopped or timed out" : e.message;
@@ -495,7 +499,11 @@ export class Validator {
 
   // ---------------------------------------------------------------- panel
   toggle() { this.panel.hidden = !this.panel.hidden; if (!this.panel.hidden) this.render(); }
+  sessionState() { return this.results.map(({ request, raw, reasoning, ...r }) => r); }   // without the request images
+  restoreSession(results) { this.results = results || []; this.progress = this.results.length ? "Restored from the last session" : ""; this.render(); }
+  changed() { if (this.onChange) try { this.onChange(); } catch { /* never break the panel */ } }
   render() {
+    this.changed();
     const p = this.panel;
     if (p.hidden) return;
     const s = this.s, sel = this.selectedRooms(), all = this.rooms();
@@ -506,6 +514,8 @@ export class Validator {
       <div class="ed3d-row"><span title="On: LM Studio forces the JSON schema (analysis is written first). Off: the model answers freely, like in LM Studio's chat, and ends with a JSON block.">strict JSON answer</span><input data-s="strict" type="checkbox" ${s.strict ? "checked" : ""}></div>
       <div class="ed3d-row"><span>max answer tokens</span><input data-s="maxTokens" type="number" step="500" min="500" value="${s.maxTokens}"></div>
       <div class="ed3d-row"><span>apply automatically from confidence</span><input data-s="autoApply" type="number" step="0.05" min="0" max="1.01" value="${s.autoApply}"></div>
+      <div class="ed3d-auto"><span class="muted">applied without review:</span> ${Object.keys(VDEFAULTS.autoActions).map((a) =>
+        `<label><input type="checkbox" data-auto="${a}" ${s.autoActions[a] ? "checked" : ""}> ${a.replace("_", " ")}</label>`).join(" ")}</div>
       <details data-ex><summary>Example images${this.s.examples ? "" : " (off)"}</summary>
         <div class="ed3d-row"><span>send example images</span><input data-s="examples" type="checkbox" ${s.examples ? "checked" : ""}></div>
         <div class="ed3d-row"><span>at most</span><input data-s="maxExamples" type="number" min="0" max="12" value="${s.maxExamples}"></div>
@@ -535,6 +545,7 @@ export class Validator {
         this.save();
       } catch (e) { alert(`Could not reach the model server: ${e.message}\nStart LM Studio's server (Developer tab) and enable CORS there.`); }
     });
+    p.querySelectorAll("[data-auto]").forEach((c) => c.addEventListener("change", () => { this.s.autoActions[c.dataset.auto] = c.checked; this.save(); }));
     bind('[data-do="addex"]', () => this.addCustom(p.querySelector("[data-exkind]").value));
     const exd = p.querySelector("[data-ex]");
     exd.addEventListener("toggle", async () => {

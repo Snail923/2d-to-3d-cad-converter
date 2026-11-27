@@ -184,3 +184,9 @@ table.cmp td.better { color: #2e7d32; font-weight: 600; } table.cmp td.worse { c
 .ed3d-exgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .ed3d-exgrid img { width: 100%; border: 1px solid #d5dae2; }
 .ed3d-exgrid figure { margin: 0; } .ed3d-exgrid figcaption { font-size: 10px; }
+
+.ed3d-auto { font-size: 11px; display: flex; flex-wrap: wrap; gap: 2px 8px; margin: 2px 0 4px; }
+
+/* the empty-state message can hold buttons (restore the last session): they take clicks, the rest stays transparent */
+.empty { z-index: 2; flex-direction: column; text-align: center; gap: 2px; }
+.empty button, .empty a { pointer-events: auto; }
